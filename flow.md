@@ -35,4 +35,4 @@ Adding Salesforce or Pipedrive means writing one class with those two methods an
 ## State and observability
 - `src/store.py`: SQLite with `PRAGMA user_version` migrations. Tables: `accounts`, `page_snapshots`, `signals`, `outreach`, `llm_calls`.
 - `src/llm/tracing.py`: `TracedLLM` logs every call (trace id from a context variable set per run, node, model, prompt version, latency, output or error). `RecordingLLM` / `ReplayLLM` back the CI eval gate.
-- `src/watch.py`: sweeps all accounts, isolates per-account failures, posts new signals to `alerts.webhook_url`, and ranks prospects using `src/scoring.py`.
+- `src/watch.py`: sweeps all accounts, isolates per-account failures, posts new signals to `alerts.webhook_url`, and ranks prospects using `src/scoring.py`: fit (ICP) × intent (decaying, diminishing-returns signals) → grade, tier, priority, with a contact cooldown read from `outreach.sent_at`.

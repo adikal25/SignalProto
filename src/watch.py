@@ -48,8 +48,11 @@ def ranked_prospects(pipeline: Pipeline, include_empty: bool = False) -> list[Pr
     for account in store.list_accounts():
         signals = store.signals(account.domain)
         if signals or include_empty:
-            out.append(Prospect(account=account, score=score_prospect(account, signals, cfg), signals=signals))
-    return sorted(out, key=lambda p: p.score.total, reverse=True)
+            score = score_prospect(account, signals, cfg, last_contacted=store.last_contacted(account.domain))
+            out.append(Prospect(account=account, score=score, signals=signals))
+    tier_rank = {"hot": 0, "warm": 1, "nurture": 2, "disqualified": 3}
+    # Actionable accounts first; ones in contact cooldown drop below them whatever their tier.
+    return sorted(out, key=lambda p: (p.score.in_cooldown, tier_rank[p.score.tier], -p.score.priority))
 
 
 def run_watch(pipeline: Pipeline, *, sync_crm: bool = False, crm_limit: int = 200) -> WatchReport:

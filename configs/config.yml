@@ -53,12 +53,27 @@ storage:
 alerts:
   webhook_url: null
 
-# prospect score = weighted sum of components in [0, 1], shown as 0-100
+# Account scoring: FIT (who they are) x INTENT (what they're doing now) -> grade A1..D4 -> tier.
 scoring:
-  type_weights: {expansion: 1.0, hiring: 0.8}
-  weights: {signal: 0.45, diversity: 0.15, recency: 0.2, size: 0.1, fit: 0.1}
-  recency_weekly_decay: 0.85
   icp:
-    min_employees: 5
-    max_employees: 200
-    verticals: []   # e.g. [dental, veterinary, fitness]; empty = no vertical preference
+    size_bands:                  # employees -> fit points
+      - {min: 1, max: 4, points: 10}
+      - {min: 5, max: 49, points: 60}
+      - {min: 50, max: 200, points: 45}
+      - {min: 201, max: 1000, points: 15}
+    unknown_size_points: 30
+    disqualify_above: 5000       # enterprise: not our buyer
+    verticals: [dental, veterinary, fitness, medical, salon]
+    excluded_verticals: []
+    vertical_points: 40
+  signal_types:
+    expansion: {base_value: 0.75, half_life_days: 60}
+    hiring: {base_value: 0.6, half_life_days: 30}
+  # we sell scheduling: front-office hiring and new locations matter most
+  relevant_keywords:
+    hiring: [front desk, receptionist, coordinator, office manager, patient, scheduler, hygienist, technician, trainer]
+  irrelevant_multiplier: 0.6
+  surge_window_days: 30
+  surge_bonus: 0.25
+  contact_cooldown_days: 21
+  cooldown_penalty: 0.5

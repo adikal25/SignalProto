@@ -71,6 +71,10 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX llm_calls_trace ON llm_calls (trace_id);
     """,
+    # 2: track when a draft was actually sent; drafts alone are not contact.
+    """
+    ALTER TABLE outreach ADD COLUMN sent_at TEXT;
+    """,
 ]
 
 
@@ -110,6 +114,7 @@ class OutreachRow(BaseModel):
     call_to_action: str
     status: str
     created_at: datetime
+    sent_at: Optional[datetime] = None
 
 
 class LLMCallRow(BaseModel):
@@ -262,6 +267,18 @@ class Store:
                 (domain, fingerprint, email.subject, email.body, email.call_to_action, utcnow()),
             )
             return int(cur.lastrowid or 0)
+
+    def mark_outreach_sent(self, outreach_id: int) -> Optional[OutreachRow]:
+        with self._conn() as c:
+            c.execute("UPDATE outreach SET status = 'sent', sent_at = COALESCE(sent_at, ?) WHERE id = ?",
+                      (utcnow(), outreach_id))
+            row = c.execute("SELECT * FROM outreach WHERE id = ?", (outreach_id,)).fetchone()
+        return OutreachRow(**row) if row else None
+
+    def last_contacted(self, domain: str) -> Optional[datetime]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(sent_at) AS t FROM outreach WHERE domain = ?", (domain,)).fetchone()
+        return datetime.fromisoformat(row["t"]) if row and row["t"] else None
 
     def outreach(self, domain: str) -> list[OutreachRow]:
         with self._conn() as c:

@@ -10,6 +10,7 @@
     --accent: #2f6fde; --accent-ink: #ffffff; --soft: #f0f2f6;
     --hire: #7a4fd6; --hire-bg: #f1ecfc; --exp: #0f8a5f; --exp-bg: #e6f5ee;
     --ok: #0f8a5f; --warn: #b7791f; --bad: #c53030;
+    --hot: #c2410c; --hot-bg: #fdeee5; --warm: #a16207; --warm-bg: #fbf3dc;
     --radius: 10px; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.04);
   }
   @media (prefers-color-scheme: dark) {
@@ -17,6 +18,7 @@
       --bg: #121315; --panel: #1a1b1e; --ink: #e8e8e6; --muted: #9a9ea6; --line: #2a2c30;
       --accent: #5b8ff0; --soft: #22242a;
       --hire: #b39af0; --hire-bg: #2a2340; --exp: #4cc79a; --exp-bg: #17302a;
+      --hot: #fb9a64; --hot-bg: #3a2418; --warm: #e5b94f; --warm-bg: #33291a;
       --shadow: none;
     }
   }
@@ -81,20 +83,34 @@
   .chip.hiring { color: var(--hire); background: var(--hire-bg); }
   .chip.expansion { color: var(--exp); background: var(--exp-bg); }
   .chip.stale { color: var(--muted); background: var(--soft); }
+  .grade { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 8px 2px 3px; border-radius: 99px; white-space: nowrap; }
+  .grade b { font-variant-numeric: tabular-nums; padding: 0 6px; border-radius: 99px; background: var(--panel); }
+  .grade.hot { color: var(--hot); background: var(--hot-bg); }
+  .grade.warm { color: var(--warm); background: var(--warm-bg); }
+  .grade.nurture, .grade.disqualified { color: var(--muted); background: var(--soft); }
+  .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .meter span { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .meter span b { color: var(--ink); font-size: 15px; }
+  .reasons { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .reasons li { display: grid; grid-template-columns: 48px 1fr; gap: 8px; padding: 3px 0; }
+  .reasons .pts { font-variant-numeric: tabular-nums; text-align: right; color: var(--muted); }
+  .reasons .pts.pos { color: var(--ok); } .reasons .pts.neg { color: var(--bad); }
+  .reasons .axis { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-left: 6px; }
+  .action { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--soft); font-size: 13px; }
   .empty { padding: 48px 24px; text-align: center; color: var(--muted); }
 
   .detail { position: sticky; top: 16px; padding: 18px; }
   .detail h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
   .detail h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; font-weight: 600; }
-  .breakdown { display: grid; grid-template-columns: 72px 1fr 34px; gap: 6px 10px; align-items: center; font-size: 13px; }
-  .breakdown span:first-child { color: var(--muted); }
-  .sig { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+    .sig { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
   .sig p { margin: 6px 0 4px; }
   .sig a { color: var(--accent); text-decoration: none; font-size: 12px; }
   .email { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .email .subj { padding: 10px 12px; border-bottom: 1px solid var(--line); font-weight: 600; background: var(--soft); }
   .email pre { margin: 0; padding: 12px; white-space: pre-wrap; font: inherit; }
-  .email .actions { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .email .actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .email .actions .btn { white-space: nowrap; }
+  .cool { display: block; margin-top: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .err { color: var(--bad); }
 
@@ -139,7 +155,7 @@
 
     <section id="prospectsView" class="layout">
       <div class="card"><table>
-        <thead><tr><th style="width:120px">Score</th><th style="width:200px">Account</th><th style="width:110px">Signals</th><th>Latest evidence</th><th style="width:84px">Seen</th></tr></thead>
+        <thead><tr><th style="width:110px" title="Geometric mean of fit and intent">Priority</th><th style="width:118px">Grade</th><th style="width:190px">Account</th><th style="width:110px">Signals</th><th>Latest evidence</th><th style="width:80px">Seen</th></tr></thead>
         <tbody id="prospectRows"></tbody>
       </table></div>
       <aside class="card detail" id="detail"><div class="empty">Select a prospect to see why it ranks where it does.</div></aside>
@@ -181,6 +197,8 @@ function ago(iso) {
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 }
+const grade = (sc) => `<span class="grade ${sc.tier}" title="Fit ${sc.fit.toFixed(0)} · Intent ${sc.intent.toFixed(0)}"><b>${esc(sc.grade)}</b>${sc.tier}</span>`;
+const fmtPts = (n) => (n > 0 ? "+" : "") + n.toFixed(0);
 const chips = (types) => [...new Set(types)].sort().map((t) => `<span class="chip ${t}">${t}</span>`).join("");
 
 async function loadHealth() {
@@ -200,21 +218,23 @@ async function loadProspects() {
   const rows = await api("/prospects");
   const signals = rows.flatMap((p) => p.signals);
   const week = signals.filter((s) => Date.now() - new Date(s.first_seen) < 7 * 864e5).length;
+  const tiers = (t) => rows.filter((p) => p.score.tier === t && !p.score.in_cooldown).length;
   $("#stats").innerHTML = [
-    [rows.length, "prospects with live signals"], [signals.length, "active signals"],
-    [week, "new this week"], [rows.length ? Math.round(rows[0].score.total) : "–", "top score"],
+    [tiers("hot"), "hot: reach out today"], [tiers("warm"), "warm: this week's sequence"],
+    [signals.length, "active signals"], [week, "new this week"],
   ].map(([b, s]) => `<div class="stat"><b class="num">${b}</b><span>${s}</span></div>`).join("");
 
   $("#prospectRows").innerHTML = rows.length ? rows.map((p) => {
     const top = p.signals[0];
     const seen = p.signals.map((s) => s.last_seen).sort().pop();
     return `<tr class="row ${p.account.domain === selected ? "selected" : ""}" data-domain="${esc(p.account.domain)}">
-      <td><div class="score num">${p.score.total.toFixed(0)}<div class="bar"><i style="width:${p.score.total}%"></i></div></div></td>
+      <td><div class="score num">${p.score.priority.toFixed(0)}<div class="bar"><i style="width:${p.score.priority}%"></i></div></div></td>
+      <td>${grade(p.score)}${p.score.in_cooldown ? `<span class="cool">contacted ${p.score.contacted_days_ago}d ago</span>` : ""}</td>
       <td><div class="co">${esc(p.account.company || p.account.domain)}</div><div class="sub">${esc(p.account.domain)}</div></td>
       <td>${chips(p.signals.map((s) => s.signal_type))}</td>
       <td><div class="snip" title="${esc(top.snippet)}">${esc(top.snippet)}</div></td>
       <td class="sub nowrap">${ago(seen)}</td></tr>`;
-  }).join("") : `<tr><td colspan="5"><div class="empty">No signals yet. Track a domain above to start.</div></td></tr>`;
+  }).join("") : `<tr><td colspan="6"><div class="empty">No signals yet. Track a domain above to start.</div></td></tr>`;
 
   document.querySelectorAll("tr.row").forEach((tr) => tr.onclick = () => showDetail(tr.dataset.domain));
   if (!selected && rows.length) showDetail(rows[0].account.domain);
@@ -225,26 +245,38 @@ async function showDetail(domain) {
   document.querySelectorAll("tr.row").forEach((tr) => tr.classList.toggle("selected", tr.dataset.domain === domain));
   const d = await api(`/prospects/detail?domain=${encodeURIComponent(domain)}`);
   const {account, score, signals} = d.prospect;
-  const parts = ["signal", "diversity", "recency", "size", "fit"];
   const email = d.outreach[0];
+  const worth = Object.fromEntries(score.signals.map((c) => [c.fingerprint, c]));
+  const meter = (label, v) => `<div class="meter"><span>${label}<b class="num">${v.toFixed(0)}</b></span><div class="bar"><i style="width:${v}%"></i></div></div>`;
   const meta = [account.employees && `${account.employees} employees`, account.vertical].filter(Boolean).join(" · ");
   $("#detail").innerHTML = `
     <h2>${esc(account.company || account.domain)}</h2>
     <div class="sub">${esc(account.domain)}${meta ? " · " + esc(meta) : ""}</div>
-    <h3>Score ${score.total.toFixed(0)} / 100</h3>
-    <div class="breakdown">${parts.map((k) => `<span>${k}</span><div class="bar"><i style="width:${score[k] * 100}%"></i></div><span class="num sub">${score[k].toFixed(2)}</span>`).join("")}</div>
+    <h3>Score</h3>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">${grade(score)}<span class="sub">priority <b class="num" style="color:var(--ink)">${score.priority.toFixed(0)}</b> / 100</span></div>
+    <div class="meters">${meter("Fit · who they are", score.fit)}${meter("Intent · what they're doing", score.intent)}</div>
+    <div class="action">→ ${esc(score.action)}</div>
+    <h3>Why</h3>
+    <ul class="reasons">${score.reasons.map((r) => `<li><span class="pts ${r.points > 0 ? "pos" : r.points < 0 ? "neg" : ""}">${fmtPts(r.points)}</span><span>${esc(r.text)}<span class="axis">${r.axis}</span></span></li>`).join("")}</ul>
     <h3>Signals</h3>
-    ${signals.map((s) => `<div class="sig">${chips([s.signal_type])}<span class="sub num">confidence ${s.confidence.toFixed(2)} · first seen ${ago(s.first_seen)}</span>
+    ${signals.map((s) => `<div class="sig">${chips([s.signal_type])}<span class="sub num">confidence ${s.confidence.toFixed(2)} · ${worth[s.fingerprint] ? `worth ${worth[s.fingerprint].value.toFixed(2)}${worth[s.fingerprint].relevant ? "" : " (off-target)"} · ` : ""}first seen ${ago(s.first_seen)}</span>
       <p>“${esc(s.snippet)}”</p><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></div>`).join("") || `<div class="sub">No active signals.</div>`}
     ${d.stale_signals.length ? `<div class="sub" style="margin-top:6px"><span class="chip stale">stale</span>${d.stale_signals.length} signal(s) no longer on the site</div>` : ""}
     <h3>Outreach draft</h3>
     ${email ? `<div class="email"><div class="subj">${esc(email.subject)}</div><pre>${esc(email.body)}</pre>
       <div class="actions"><button class="btn sm" id="copyBtn">Copy</button>
       <a class="btn sm" target="_blank" rel="noopener" href="https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(email.subject)}&body=${encodeURIComponent(email.body)}">Open in Gmail</a>
-      <span class="sub" style="margin-left:auto;align-self:center">${ago(email.created_at)}</span></div></div>`
+      ${email.status === "sent" ? "" : `<button class="btn sm" id="sentBtn" title="Starts the contact cooldown in scoring">Mark sent</button>`}
+      <span class="sub" style="margin-left:auto;align-self:center">${email.sent_at ? "sent " + ago(email.sent_at) : "drafted " + ago(email.created_at)}</span></div></div>`
     : `<div class="sub">No draft. Outreach is written only for new signals above the confidence gate.</div>`}`;
   const copy = $("#copyBtn");
   if (copy) copy.onclick = async () => { await navigator.clipboard.writeText(`Subject: ${email.subject}\n\n${email.body}`); toast("Draft copied"); };
+  const sent = $("#sentBtn");
+  if (sent) sent.onclick = async () => {
+    await api(`/outreach/${email.id}/sent`, {method: "POST"});
+    toast("Marked as sent · contact cooldown started");
+    await loadProspects(); showDetail(domain);
+  };
 }
 
 async function loadTraces() {

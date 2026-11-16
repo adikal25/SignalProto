@@ -124,7 +124,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     @app.get("/prospects", response_model=list[Prospect])
     def prospects(include_empty: bool = False, p: Pipeline = Depends(pipeline)) -> list[Prospect]:
-        """Tracked accounts ranked by score (signals x recency x ICP fit)."""
+        """Tracked accounts ranked by tier, then priority (geometric mean of fit and intent)."""
         return ranked_prospects(p, include_empty=include_empty)
 
     @app.get("/prospects/detail", response_model=ProspectDetail)
@@ -135,6 +135,14 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         store = p.deps.store
         stale = [s for s in store.signals(domain, status="stale")]
         return ProspectDetail(prospect=match[0], outreach=store.outreach(domain), stale_signals=stale)
+
+    @app.post("/outreach/{outreach_id}/sent", response_model=OutreachRow)
+    def mark_sent(outreach_id: int, p: Pipeline = Depends(pipeline)) -> OutreachRow:
+        """Record that a draft was sent; starts the account's contact cooldown in scoring."""
+        row = p.deps.store.mark_outreach_sent(outreach_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown outreach id {outreach_id}")
+        return row
 
     @app.get("/traces", response_model=list[LLMCallRow])
     def traces(trace_id: Optional[str] = None, limit: int = Query(default=100, ge=1, le=1000),

@@ -16,7 +16,7 @@ from src.integrations.crm import Account
 from src.llm.ollama_runtime import LLMError
 from src.llm.tracing import CassetteMiss, RecordingLLM, ReplayLLM, TracedLLM, prompt_version
 from src.schemas import SignalVerdict
-from src.scoring import score_prospect
+from src.scoring import score_fit, score_intent, score_prospect
 from src.settings import CrawlSettings, ICPSettings, ScoringSettings, Settings
 from src.signals.changes import fingerprint, normalize_snippet
 from src.store import AccountRow, SignalRow, Store
@@ -135,28 +135,94 @@ def test_watch_isolates_per_account_failures(store):
 
 # --- scoring ---------------------------------------------------------------------
 
-def _sig(t: str, conf: float, age_days: int = 0) -> SignalRow:
-    seen = datetime.now(timezone.utc) - timedelta(days=age_days)
-    return SignalRow(fingerprint=f"{t}{conf}{age_days}", domain="a", signal_type=t, url="https://a/",
-                     snippet="s", detail=None, confidence=conf, explain="", first_seen=seen,
+NOW = datetime(2026, 11, 15, tzinfo=timezone.utc)
+
+
+def _sig(t: str, conf: float = 0.9, age_days: int = 0, snippet: str = "s", detail: str | None = None) -> SignalRow:
+    seen = NOW - timedelta(days=age_days)
+    return SignalRow(fingerprint=f"{t}{conf}{age_days}{snippet}", domain="a", signal_type=t, url="https://a/",
+                     snippet=snippet, detail=detail, confidence=conf, explain="", first_seen=seen,
                      last_seen=seen, status="active")
 
 
-def test_score_orders_by_strength_diversity_recency_and_fit():
-    cfg = ScoringSettings(icp=ICPSettings(min_employees=5, max_employees=200, verticals=["dental"]))
-    acct = AccountRow(domain="a", employees=40, vertical="Dental clinic")
-    both = score_prospect(acct, [_sig("expansion", 0.9), _sig("hiring", 0.9)], cfg)
-    one = score_prospect(acct, [_sig("expansion", 0.9)], cfg)
-    old = score_prospect(acct, [_sig("expansion", 0.9, age_days=120)], cfg)
-    off_icp = score_prospect(AccountRow(domain="a", employees=5000, vertical="Banking"), [_sig("expansion", 0.9)], cfg)
-    assert both.total > one.total > old.total
-    assert one.total > off_icp.total
-    assert score_prospect(acct, [], cfg).total == 0
+DENTAL = AccountRow(domain="a", employees=30, vertical="Dental clinic")
+CFG = ScoringSettings(icp=ICPSettings(verticals=["dental"], excluded_verticals=["staffing"]))
 
 
-def test_unknown_size_and_no_icp_are_neutral():
-    s = score_prospect(AccountRow(domain="a"), [_sig("hiring", 0.8)], ScoringSettings())
-    assert s.size == 0.5 and s.fit == 0.5
+def test_fit_uses_size_bands_and_vertical():
+    assert score_fit(DENTAL, CFG)[0] == 100.0
+    assert score_fit(AccountRow(domain="a", employees=500, vertical="Dental"), CFG)[0] < 70
+    assert score_fit(AccountRow(domain="a", employees=30, vertical="Banking"), CFG)[0] == 60.0
+    unknown, reasons, _ = score_fit(AccountRow(domain="a"), CFG)
+    assert unknown == 50.0 and any("unknown" in r.text for r in reasons)
+
+
+@pytest.mark.parametrize("account,why", [
+    (AccountRow(domain="a", employees=9000, vertical="Dental"), "too large"),
+    (AccountRow(domain="a", employees=30, vertical="Staffing agency"), "excluded vertical"),
+])
+def test_disqualifiers_zero_priority(account, why):
+    s = score_prospect(account, [_sig("expansion")], CFG, now=NOW)
+    assert s.tier == "disqualified" and s.priority == 0 and why in s.action
+
+
+def test_intent_decays_by_half_life_per_type():
+    fresh, _, _ = score_intent([_sig("hiring")], CFG, NOW)
+    month_old, _, _ = score_intent([_sig("hiring", age_days=30)], CFG, NOW)  # hiring half-life is 30d
+    assert month_old == pytest.approx(fresh / 2, abs=0.2)
+    old_exp, _, _ = score_intent([_sig("expansion", age_days=30)], CFG, NOW)  # expansion half-life is 60d
+    assert old_exp > month_old
+
+
+def test_signals_stack_with_diminishing_returns():
+    one, _, _ = score_intent([_sig("hiring", snippet="a")], CFG, NOW)
+    two, _, _ = score_intent([_sig("hiring", snippet="a"), _sig("hiring", snippet="b")], CFG, NOW)
+    assert one < two < 2 * one
+
+
+def test_surge_bonus_for_multiple_signal_types():
+    same, _, _ = score_intent([_sig("hiring", snippet="a"), _sig("hiring", snippet="b")], CFG, NOW)
+    mixed, reasons, _ = score_intent([_sig("hiring", snippet="a"), _sig("expansion", snippet="b")], CFG, NOW)
+    assert mixed > same and any("Surge" in r.text for r in reasons)
+
+
+def test_irrelevant_roles_count_less():
+    cfg = ScoringSettings(relevant_keywords={"hiring": ["front desk"]})
+    relevant, _, _ = score_intent([_sig("hiring", snippet="Hiring a front desk lead")], cfg, NOW)
+    other, _, contrib = score_intent([_sig("hiring", snippet="Hiring a CFO")], cfg, NOW)
+    assert other == pytest.approx(relevant * cfg.irrelevant_multiplier, abs=0.2) and not contrib[0].relevant
+
+
+def test_grades_tiers_and_priority():
+    hot = score_prospect(DENTAL, [_sig("expansion"), _sig("hiring")], CFG, now=NOW)
+    assert hot.grade == "A1" and hot.tier == "hot" and hot.action == "Reach out today"
+    no_intent = score_prospect(DENTAL, [], CFG, now=NOW)
+    assert no_intent.tier == "nurture" and no_intent.priority == 0
+    stale = score_prospect(DENTAL, [_sig("hiring", age_days=120)], CFG, now=NOW)
+    assert stale.tier == "nurture" and stale.priority < hot.priority
+
+
+def test_contact_cooldown_lowers_priority_and_changes_action():
+    signals = [_sig("expansion"), _sig("hiring")]
+    fresh = score_prospect(DENTAL, signals, CFG, now=NOW)
+    contacted = score_prospect(DENTAL, signals, CFG, last_contacted=NOW - timedelta(days=3), now=NOW)
+    assert contacted.priority == pytest.approx(fresh.priority * 0.5, abs=0.1)
+    assert "Already contacted 3d ago" in contacted.action and contacted.in_cooldown
+    later = score_prospect(DENTAL, signals, CFG, last_contacted=NOW - timedelta(days=40), now=NOW)
+    assert later.priority == fresh.priority
+
+
+def test_mark_sent_starts_cooldown(store):
+    p = make_pipeline(store, Site({"/": HOME}))
+    p.run(ACME)
+    [draft] = store.outreach("acme.test")
+    assert store.last_contacted("acme.test") is None  # a draft is not contact
+    client = TestClient(create_app(p.deps))
+    assert client.post(f"/outreach/{draft.id}/sent").json()["status"] == "sent"
+    assert store.last_contacted("acme.test") is not None
+    [prospect] = client.get("/prospects").json()
+    assert prospect["score"]["contacted_days_ago"] == 0
+    assert client.post("/outreach/999/sent").status_code == 404
 
 
 # --- tracing & replay ------------------------------------------------------------
@@ -208,7 +274,7 @@ def test_api_prospects_detail_traces_and_dashboard(store):
     assert run["pages_changed"] == 2 and all(s["is_new"] for s in run["signals"])
 
     [prospect] = client.get("/prospects").json()
-    assert prospect["account"]["employees"] == 30 and prospect["score"]["total"] > 0
+    assert prospect["account"]["employees"] == 30 and prospect["score"]["priority"] > 0
 
     detail = client.get("/prospects/detail", params={"domain": "acme.test"}).json()
     assert len(detail["outreach"]) == 1
