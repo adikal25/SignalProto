@@ -90,11 +90,11 @@ def build_graph(deps: Deps):
 
     def crawl_node(state: PipelineState) -> dict:
         domain = state.account.domain
-        pages = crawl(domain, s.crawl, fetcher=deps.fetcher)
+        previous = store.snapshot_hashes(domain)
+        pages = crawl(domain, s.crawl, fetcher=deps.fetcher, known_urls=list(previous))
         if not pages:
             return {"pages": [], "skipped_reason": "no_pages_fetched"}
         hashes = {p.url: content_hash(p.text) for p in pages}
-        previous = store.snapshot_hashes(domain)
         changed = [u for u, h in hashes.items() if state.force or previous.get(u) != h]
         store.touch_signals_on_pages(domain, [u for u in hashes if u not in changed])
         store.save_snapshots(domain, hashes)
@@ -106,8 +106,7 @@ def build_graph(deps: Deps):
         changed_pages = [p for p in state.pages if p.url in state.changed_urls]
         if not changed_pages:
             return {"detected": []}
-        cards = detect_signals(changed_pages, deps.signal_llm, freshness=s.freshness,
-                               max_candidates=s.signals.max_candidates_per_domain)
+        cards = detect_signals(changed_pages, deps.signal_llm, freshness=s.freshness, signals=s.signals)
         known = store.known_fingerprints(domain)
         detected: list[DetectedSignal] = []
         for card in cards:
@@ -144,7 +143,7 @@ def build_graph(deps: Deps):
             slots = []
         company = state.account.company or state.account.domain
         email = draft_email(deps.outbound_llm, top.card, company, s.sender, slots,
-                            deps.booker.booking_link(), s.booking.timezone)
+                            deps.booker.booking_link(), s.booking.timezone, s.signals.types)
         store.add_outreach(state.account.domain, top.fingerprint, email)
         return {"email": email}
 

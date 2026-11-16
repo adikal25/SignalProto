@@ -1,5 +1,9 @@
 crawl:
   paths: ["/", "/test.html", "/careers", "/jobs", "/locations", "/news", "/press", "/blog", "/about"]
+  # discover: read the homepage's links and /sitemap.xml and pick pages whose URL or link text
+  # matches a hint word (careers, join, locations, news...). `paths` above are tried as a fallback.
+  discover: true
+  # link_hints: [career, job, hiring, join, location, office, news, press, blog]   # default list in src/settings.py
   max_pages: 8
   timeout_seconds: 15
 
@@ -43,6 +47,20 @@ llm:
 
 signals:
   max_candidates_per_domain: 12
+  # Built-in types: hiring, expansion (full definitions in src/settings.py, DEFAULT_SIGNAL_TYPES).
+  # Types listed here merge with the built-ins: add a new one, override fields of a built-in,
+  # or set a built-in to null to turn it off. Each type also needs a scoring.signal_types entry.
+  # The eval (eval/signals_labeled.jsonl) only labels the built-ins; label examples for a new type
+  # before trusting its precision.
+  # types:
+  #   new_service:
+  #     description: the business itself is launching or now offers a new service or treatment.
+  #     detail: the new service
+  #     strong_when: a named service
+  #     noticed: Saw that you've added a new service
+  #     keywords: ['now offer(?:s|ing)?', 'introducing', 'new service', 'now available', 'launch(?:ed|ing)?']
+  #   expansion: null        # e.g. turn off a built-in
+  # examples: [...]          # few-shot examples; replaces the built-in list (see DEFAULT_SIGNAL_EXAMPLES)
 
 sender:
   name: Alex
@@ -88,6 +106,7 @@ scoring:
   signal_types:
     expansion: {base_value: 0.75, half_life_days: 60}
     hiring: {base_value: 0.6, half_life_days: 30}
+    # new_service: {base_value: 0.5, half_life_days: 45}
   # we sell scheduling: front-office hiring and new locations matter most
   relevant_keywords:
     hiring: [front desk, receptionist, coordinator, office manager, patient, scheduler, hygienist, technician, trainer]

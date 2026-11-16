@@ -3,76 +3,87 @@
 Keyword matching fires on "careers" in a footer, "apply sunscreen", "we are not hiring",
 "opened in 1998". The agent sends each keyword hit, with its surrounding context, to a
 local model constrained to a JSON schema, and keeps only current, first-party events.
+The types it looks for, their keywords and the few-shot examples come from settings.signals.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from functools import lru_cache
+from typing import Literal, Optional
+
+from pydantic import create_model
 
 from src.llm.base import LLM, LLMError
 from src.schemas import Candidate, EvidenceCard, Page, SignalVerdict
-from src.settings import FreshnessSettings
-from src.signals.keyword import candidates_from_pages
+from src.settings import FreshnessSettings, SignalSettings
+from src.signals.keyword import KeywordMatcher
 
 log = logging.getLogger(__name__)
 
-SYSTEM = """You verify B2B sales triggers found on a small business's own website.
-Decide whether the SENTENCE announces a CURRENT, FIRST-PARTY event of one of these types:
-- hiring: the business itself is actively recruiting now (open roles, "we're hiring", a job posting).
-- expansion: the business itself is opening, has just opened, or will open a new location, office, clinic, store or service area.
-Return signal_type "none" when:
+SYSTEM_HEAD = """You verify B2B sales triggers found on a small business's own website.
+Decide whether the SENTENCE announces a CURRENT, FIRST-PARTY event of one of these types:"""
+
+SYSTEM_RULES = """Return signal_type "none" when:
 - the keyword is used in another sense ("apply sunscreen", "open 9am-5pm", "book a job", "jobs done right", "expand your smile");
 - the statement is negated or closed ("not hiring", "positions filled", "closed our Austin office");
 - it is historical background ("founded in 1998", "opened our doors in 2005");
 - it is generic navigation or boilerplate with no event ("Careers", "Privacy | Careers | Contact");
 - it is about someone else (a client, a competitor, a news story about another company).
-strength is "strong" for a specific, dated or concrete announcement (a named role, a named city or address, a date),
-otherwise "weak". detail is the role or the new location if the text names one, else ""."""
+strength is "strong" for a specific, dated or concrete announcement ({strong}, a date),
+otherwise "weak". detail is {detail} if the text names one, else \"\"."""
 
-EXAMPLES: list[tuple[str, str, SignalVerdict]] = [
-    (
-        "Grand opening of our second clinic in Cary on March 3!",
-        "Grand opening of our second clinic in Cary on March 3! Book your first visit today.",
-        SignalVerdict(signal_type="expansion", strength="strong", detail="Cary", reason="Announces a new clinic location with a date."),
-    ),
-    (
-        "Home | Services | Careers | Contact",
-        "Home | Services | Careers | Contact",
-        SignalVerdict(signal_type="none", strength="weak", detail="", reason="Navigation link, not a hiring announcement."),
-    ),
-    (
-        "We're hiring a front desk coordinator and two dental hygienists.",
-        "Join our growing team. We're hiring a front desk coordinator and two dental hygienists. Apply below.",
-        SignalVerdict(signal_type="hiring", strength="strong", detail="front desk coordinator, dental hygienists", reason="Names specific open roles."),
-    ),
-    (
-        "Proudly serving Raleigh since we opened in 1998.",
-        "Family owned. Proudly serving Raleigh since we opened in 1998.",
-        SignalVerdict(signal_type="none", strength="weak", detail="", reason="Historical opening date, not a current event."),
-    ),
-]
+DEFAULT_SIGNALS = SignalSettings()
+
+
+def _or_join(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " or " + items[-1]
+
+
+def system_prompt(cfg: SignalSettings) -> str:
+    """The verifier's instructions, built from the configured signal types."""
+    types = cfg.types.values()
+    lines = [f"- {name}: {t.description}" for name, t in cfg.types.items()]
+    rules = SYSTEM_RULES.format(strong=", ".join(t.strong_when for t in types),
+                                detail=_or_join([t.detail for t in types]))
+    return "\n".join([SYSTEM_HEAD, *lines, rules])
+
+
+@lru_cache(maxsize=32)
+def _verdict_schema(types: tuple[str, ...]) -> type[SignalVerdict]:
+    return create_model("SignalVerdict", __base__=SignalVerdict,
+                        signal_type=(Literal[types + ("none",)], ...))  # type: ignore[valid-type]
+
+
+def verdict_schema(cfg: SignalSettings) -> type[SignalVerdict]:
+    """SignalVerdict with signal_type narrowed to the configured types, so the JSON schema constrains the model."""
+    return _verdict_schema(tuple(cfg.types))
 
 
 def _user_message(sentence: str, context: str, url: str) -> str:
     return f"URL: {url}\nCONTEXT: {context}\nSENTENCE: {sentence}"
 
 
-def build_messages(c: Candidate) -> list[dict[str, str]]:
-    messages = [{"role": "system", "content": SYSTEM}]
-    for sentence, context, verdict in EXAMPLES:
-        messages.append({"role": "user", "content": _user_message(sentence, context, "https://example.com/")})
+def build_messages(c: Candidate, cfg: SignalSettings = DEFAULT_SIGNALS) -> list[dict[str, str]]:
+    messages = [{"role": "system", "content": system_prompt(cfg)}]
+    for ex in cfg.examples:
+        verdict = SignalVerdict(signal_type=ex.signal_type, strength=ex.strength, detail=ex.detail, reason=ex.reason)
+        messages.append({"role": "user", "content": _user_message(ex.sentence, ex.context, "https://example.com/")})
         messages.append({"role": "assistant", "content": verdict.model_dump_json()})
     messages.append({"role": "user", "content": _user_message(c.sentence, c.context, c.url)})
     return messages
 
 
-def verify(llm: LLM, candidate: Candidate) -> Optional[SignalVerdict]:
+def verify(llm: LLM, candidate: Candidate, cfg: SignalSettings = DEFAULT_SIGNALS) -> Optional[SignalVerdict]:
     try:
-        return llm.chat_json(build_messages(candidate), SignalVerdict)
+        verdict = llm.chat_json(build_messages(candidate, cfg), verdict_schema(cfg))
     except LLMError as e:
         log.warning("verification failed for %r: %s", candidate.sentence[:80], e)
         return None
+    if verdict.signal_type != "none" and verdict.signal_type not in cfg.types:
+        log.warning("verifier returned unknown signal type %r; ignoring", verdict.signal_type)
+        return None
+    return verdict
 
 
 def freshness_weight(published_at: Optional[datetime], cfg: FreshnessSettings) -> float:
@@ -94,13 +105,14 @@ def score(verdict: SignalVerdict, published_at: Optional[datetime], cfg: Freshne
 
 
 def detect_signals(
-    pages: list[Page], llm: LLM, *, freshness: FreshnessSettings, max_candidates: int
+    pages: list[Page], llm: LLM, *, freshness: FreshnessSettings, signals: SignalSettings = DEFAULT_SIGNALS
 ) -> list[EvidenceCard]:
     """Return verified signals, strongest first."""
     now = datetime.now(timezone.utc)
     cards: list[EvidenceCard] = []
-    for c in candidates_from_pages(pages, limit=max_candidates):
-        verdict = verify(llm, c)
+    matcher = KeywordMatcher(signals.types)
+    for c in matcher.candidates(pages, limit=signals.max_candidates_per_domain):
+        verdict = verify(llm, c, signals)
         if verdict is None or verdict.signal_type == "none":
             continue
         conf, explain = score(verdict, c.published_at, freshness)

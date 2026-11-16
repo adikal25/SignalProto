@@ -111,14 +111,14 @@ def test_candidates_dedup_and_limit():
 
 def test_signal_agent_filters_keyword_false_positives():
     pages = crawl("acme.test", CrawlSettings(paths=["/", "/careers"]), fetcher=fake_fetch)
-    cards = detect_signals(pages, FakeLLM(), freshness=FreshnessSettings(), max_candidates=20)
+    cards = detect_signals(pages, FakeLLM(), freshness=FreshnessSettings())
     assert {c.signal_type for c in cards} == {"expansion", "hiring"}
     assert all("Careers |" not in c.snippet and "not hiring" not in c.snippet for c in cards)
 
 
 def test_signal_agent_survives_llm_outage():
     pages = [Page(url="https://a/", path="/", text="We're hiring a nurse.")]
-    assert detect_signals(pages, FakeLLM(fail=True), freshness=FreshnessSettings(), max_candidates=5) == []
+    assert detect_signals(pages, FakeLLM(fail=True), freshness=FreshnessSettings()) == []
 
 
 def test_freshness_decays_and_floors():
