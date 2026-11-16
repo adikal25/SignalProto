@@ -3,7 +3,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
-SignalType = Literal["hiring", "expansion"]
+# Signal types are configured (settings.signals.types); "hiring" and "expansion" are the defaults.
+SignalType = str
 
 
 class Page(BaseModel):
@@ -24,8 +25,12 @@ class Candidate(BaseModel):
 
 
 class SignalVerdict(BaseModel):
-    """Structured output the signal agent's LLM must return for each candidate."""
-    signal_type: Literal["hiring", "expansion", "none"]
+    """Structured output the signal agent's LLM must return for each candidate.
+
+    The model is called with `verdict_schema(types)`, a subclass that narrows `signal_type`
+    to the configured types plus "none", so the JSON schema constrains generation.
+    """
+    signal_type: str
     strength: Literal["strong", "weak"]
     # Required (not Optional): small models under a JSON-schema constraint almost always pick
     # null for optional fields. "" means "not stated".

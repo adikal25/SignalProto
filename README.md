@@ -65,6 +65,8 @@ python -m eval.run_eval --model llama3.2:3b --write-baseline  # accept new score
 
 ## Features
 - **LangGraph pipeline:** crawl → signal agent → gate → outbound agent → CRM sync (see [flow.md](flow.md)).
+- **Finds each site's own pages:** the crawler ranks the homepage's links and `/sitemap.xml` by hint words in the URL (and, at half weight, the link text), so `/work-with-us` or `/visit/holly-springs` is read without configuring paths. At most 2 pages per section (a blog can't eat the budget), newer sitemap entries first, pages seen before are always re-checked, and `crawl.paths` stay as a fallback.
+- **Your own signal types:** hiring and expansion are built in; add one (say `new_service`) in `signals.types` with a description, keywords and what makes it strong. The keyword stage, the verification prompt, the JSON schema the model is held to, and the email fallback are all built from that list. The eval only labels the built-ins, so label examples before trusting a new type's precision.
 - **Structured outputs on every provider:** the model is constrained to Pydantic JSON schemas (Ollama `format`, Claude structured outputs, OpenAI-style `response_format`), so there is no regex-parsing of model text.
 - **Bring your own key:** per-agent provider choice; keys come from environment variables only (see below).
 - **Meeting booking:** Cal.com v2 (live slots spread across days, plus `POST /meetings/book`) or any scheduling link. Slots are inserted by code, so the model can't invent a time.
@@ -72,7 +74,7 @@ python -m eval.run_eval --model llama3.2:3b --write-baseline  # accept new score
 - **Excel export, no CRM needed:** one click (or `GET /export.xlsx`) downloads a workbook with ranked **Prospects** (grade, tier, next action, evidence), every **Signal** (active and stale) and every **Outreach** draft with its sent date. `watch --export` keeps a shared workbook current after each scheduled sweep. Text from websites is always written as plain text, so a page can't plant a working formula in your spreadsheet.
 - **SQLite store** with versioned migrations: accounts, page snapshots, signals, outreach drafts, LLM calls.
 - **Dashboard** served by the API at `/`, with no build step and no extra dependencies.
-- **Tests:** 69 pytest tests, with every LLM and HTTP call faked.
+- **Tests:** 86 pytest tests, with every LLM and HTTP call faked.
 
 ## Quickstart
 
@@ -144,7 +146,7 @@ python -m eval.run_eval --provider anthropic --model claude-opus-5-5 --record --
 ```
 
 ## Configuration
-`configs/config.yml` covers crawl paths, gate, freshness, models, sender, booking, CRM, storage, alerts and scoring/ICP. Secrets come only from the environment:
+`configs/config.yml` covers crawling (discovery, hint words, fallback paths), signal types, gate, freshness, models, sender, booking, CRM, storage, alerts and scoring/ICP. Secrets come only from the environment:
 
 | Env var | Used for |
 |---|---|

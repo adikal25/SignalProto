@@ -6,16 +6,30 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 from typing import Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "config.yml"
 
 
 class CrawlSettings(BaseModel):
+    """Which pages of a prospect's site to read.
+
+    With `discover` on, the crawler reads the homepage's own links and /sitemap.xml and ranks
+    them by `link_hints`, so a site's /join-us or /visit-our-new-office is found without
+    configuration. `paths` are always tried as well, ranked below discovered matches.
+    """
     paths: list[str] = ["/", "/careers", "/jobs", "/locations", "/news", "/press", "/blog", "/about"]
+    discover: bool = True
+    link_hints: list[str] = [
+        "career", "job", "hiring", "join", "employment", "opportunit",
+        "location", "office", "clinic", "store", "branch", "opening",
+        "news", "press", "blog", "announce", "update", "about",
+    ]
+    sitemap_max_urls: int = 500  # only the first N <loc> entries are considered
     max_pages: int = 8
     timeout_seconds: int = 15
 
@@ -56,8 +70,122 @@ class LLMGroup(BaseModel):
     outbound: LLMSettings = LLMSettings(max_new_tokens=400, temperature=0.3)
 
 
+class SignalTypeDef(BaseModel):
+    """One kind of buying signal. Everything type-specific in the pipeline is built from these:
+    the keyword recall stage, the verification prompt and JSON schema, and the email fallback."""
+    description: str                 # what counts, as one line of the verification prompt
+    detail: str                      # what `detail` should hold, e.g. "the role"
+    strong_when: str                 # what makes it a strong signal, e.g. "a named role"
+    noticed: str                     # fallback email opener, e.g. "Saw that you're hiring"
+    keywords: list[str] = Field(min_length=1)  # case-insensitive regex fragments, matched on word boundaries
+
+    @field_validator("keywords")
+    @classmethod
+    def _valid_regex(cls, v: list[str]) -> list[str]:
+        for k in v:
+            try:
+                re.compile(k)
+            except re.error as e:
+                raise ValueError(f"bad keyword pattern {k!r}: {e}") from e
+        return v
+
+
+class SignalExample(BaseModel):
+    """A worked example shown to the verifier (few-shot). Order is preserved in the prompt."""
+    sentence: str
+    context: str
+    signal_type: str  # one of signals.types, or "none"
+    strength: Literal["strong", "weak"]
+    detail: str = ""
+    reason: str
+
+
+DEFAULT_SIGNAL_TYPES: dict[str, SignalTypeDef] = {
+    "hiring": SignalTypeDef(
+        description='the business itself is actively recruiting now (open roles, "we\'re hiring", a job posting).',
+        detail="the role",
+        strong_when="a named role",
+        noticed="Saw that you're hiring",
+        keywords=[
+            r"hiring", r"join (?:our|the) team", r"careers?", r"jobs?", r"positions?", r"(?:job )?openings",
+            r"open roles", r"apply(?: now)?", r"applications?", r"recruit(?:ing|ment)?", r"seeking",
+            r"looking for", r"help wanted",
+        ],
+    ),
+    "expansion": SignalTypeDef(
+        description="the business itself is opening, has just opened, or will open a new location, office, clinic, store or service area.",
+        detail="the new location",
+        strong_when="a named city or address",
+        noticed="Saw that you're opening a new location",
+        keywords=[
+            r"grand opening", r"(?:now|officially) open", r"opening (?:soon|our|a)", r"opened", r"coming soon",
+            r"new (?:location|office|clinic|store|storefront|studio|showroom|facility|branch|shop|space|building)",
+            r"(?:second|third|fourth|fifth) (?:location|office|clinic|store|studio|gym|branch|shop|salon)",
+            r"expand(?:ing|ed|s)?", r"expansion", r"ribbon cutting", r"now serving", r"moved (?:into|to)", r"lease",
+        ],
+    ),
+}
+
+DEFAULT_SIGNAL_EXAMPLES: list[SignalExample] = [
+    SignalExample(
+        sentence="Grand opening of our second clinic in Cary on March 3!",
+        context="Grand opening of our second clinic in Cary on March 3! Book your first visit today.",
+        signal_type="expansion", strength="strong", detail="Cary", reason="Announces a new clinic location with a date.",
+    ),
+    SignalExample(
+        sentence="Home | Services | Careers | Contact",
+        context="Home | Services | Careers | Contact",
+        signal_type="none", strength="weak", detail="", reason="Navigation link, not a hiring announcement.",
+    ),
+    SignalExample(
+        sentence="We're hiring a front desk coordinator and two dental hygienists.",
+        context="Join our growing team. We're hiring a front desk coordinator and two dental hygienists. Apply below.",
+        signal_type="hiring", strength="strong", detail="front desk coordinator, dental hygienists",
+        reason="Names specific open roles.",
+    ),
+    SignalExample(
+        sentence="Proudly serving Raleigh since we opened in 1998.",
+        context="Family owned. Proudly serving Raleigh since we opened in 1998.",
+        signal_type="none", strength="weak", detail="", reason="Historical opening date, not a current event.",
+    ),
+]
+
+_TYPE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+
 class SignalSettings(BaseModel):
     max_candidates_per_domain: int = 12
+    # Merged onto DEFAULT_SIGNAL_TYPES (see _merge_with_builtins). Order matters: on a keyword tie the first type wins.
+    types: dict[str, SignalTypeDef] = Field(default_factory=lambda: dict(DEFAULT_SIGNAL_TYPES), min_length=1)
+    examples: list[SignalExample] = Field(default_factory=lambda: list(DEFAULT_SIGNAL_EXAMPLES))
+
+    @field_validator("types", mode="before")
+    @classmethod
+    def _merge_with_builtins(cls, given: object) -> object:
+        """Configured types merge onto the built-ins: add a type by naming only the new one,
+        override some fields of a built-in, or set a built-in to null to turn it off."""
+        if not isinstance(given, dict):
+            return given
+        merged: dict[str, object] = {name: t.model_dump() for name, t in DEFAULT_SIGNAL_TYPES.items()}
+        for name, value in given.items():
+            if value is None:
+                merged.pop(name, None)
+            elif isinstance(value, dict) and name in merged:
+                merged[name] = {**merged[name], **value}
+            else:
+                merged[name] = value
+        return merged
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "SignalSettings":
+        for name in self.types:
+            if name == "none" or not _TYPE_NAME.match(name):
+                raise ValueError(f"signal type name {name!r}: use lowercase letters, digits and _ (not 'none')")
+        for ex in self.examples:
+            if ex.signal_type != "none" and ex.signal_type not in self.types:
+                raise ValueError(f"example {ex.sentence[:40]!r} uses signal type {ex.signal_type!r}, "
+                                 f"which is not in signals.types; edit signals.examples too")
+        return self
 
 
 class SenderSettings(BaseModel):
@@ -152,6 +280,13 @@ class Settings(BaseModel):
     storage: StorageSettings = StorageSettings()
     alerts: AlertSettings = AlertSettings()
     scoring: ScoringSettings = ScoringSettings()
+
+    @model_validator(mode="after")
+    def _every_signal_type_is_scored(self) -> "Settings":
+        missing = [t for t in self.signals.types if t not in self.scoring.signal_types]
+        if missing:
+            raise ValueError(f"add scoring.signal_types entries (base_value, half_life_days) for: {', '.join(missing)}")
+        return self
 
 
 def load_settings(path: str | Path | None = None) -> Settings:

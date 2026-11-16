@@ -110,8 +110,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         """Stateless: crawl + signal agent only. Nothing is stored, no email, no CRM write."""
         s = p.deps.settings
         pages = crawl(req.domain, s.crawl, fetcher=p.deps.fetcher)
-        cards = detect_signals(pages, p.deps.signal_llm, freshness=s.freshness,
-                               max_candidates=s.signals.max_candidates_per_domain)
+        cards = detect_signals(pages, p.deps.signal_llm, freshness=s.freshness, signals=s.signals)
         return DetectResponse(domain=req.domain, pages_crawled=len(pages), signals=cards)
 
     @app.post("/pipeline/run", response_model=RunResponse)

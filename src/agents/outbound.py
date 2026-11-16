@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.llm.base import LLM, LLMError
 from src.schemas import EmailDraft, EvidenceCard, Slot
-from src.settings import SenderSettings
+from src.settings import DEFAULT_SIGNAL_TYPES, SenderSettings, SignalTypeDef
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ Write from the rep's point of view, addressing the prospect as "you". Never writ
 Return:
 - subject: at most 60 characters, specific to the signal, no clickbait.
 - opener: one sentence starting "Saw that you're" stating what you noticed, using ONLY facts from the evidence
-  (the role they are hiring for, or the new location). Do not add facts the evidence does not state.
+  (for example the role they are hiring for, or the new location). Do not add facts the evidence does not state.
 - value: one sentence on how the rep's company helps with exactly that situation.
 No greetings, no sign-off, no meeting times, no links, no emojis, no placeholders like [Name]."""
 
@@ -47,10 +47,12 @@ def build_ask(slot_text: list[str], link: Optional[str]) -> str:
     return "Open to a 15-minute call next week?"
 
 
-def build_messages(card: EvidenceCard, company: str, sender: SenderSettings) -> list[dict[str, str]]:
+def build_messages(card: EvidenceCard, company: str, sender: SenderSettings,
+                   signal_type: Optional[SignalTypeDef] = None) -> list[dict[str, str]]:
+    meaning = f" ({signal_type.description})" if signal_type else ""
     user = "\n".join([
         f"Prospect company: {company}",
-        f"Signal type: {card.signal_type}",
+        f"Signal type: {card.signal_type}{meaning}",
         f"What their website says: \"{card.snippet}\"",
         f"Detail: {card.detail or 'n/a'}",
         f"Rep: {sender.name} at {sender.company}, which {sender.value_prop}.",
@@ -58,10 +60,11 @@ def build_messages(card: EvidenceCard, company: str, sender: SenderSettings) -> 
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
-def fallback_copy(card: EvidenceCard, company: str, sender: SenderSettings) -> DraftCopy:
-    noticed = {"hiring": "Saw that you're hiring", "expansion": "Saw that you're opening a new location"}
+def fallback_copy(card: EvidenceCard, company: str, sender: SenderSettings,
+                  signal_type: Optional[SignalTypeDef] = None) -> DraftCopy:
+    noticed = signal_type.noticed if signal_type else "Saw your recent news"
     detail = f" ({card.detail})" if card.detail else ""
-    return DraftCopy(subject=f"Quick idea for {company}", opener=f"{noticed[card.signal_type]}{detail}.",
+    return DraftCopy(subject=f"Quick idea for {company}", opener=f"{noticed}{detail}.",
                      value=f"{sender.company} {sender.value_prop}.")
 
 
@@ -71,12 +74,14 @@ def _sentence(text: str) -> str:
 
 
 def draft_email(llm: LLM, card: EvidenceCard, company: str, sender: SenderSettings,
-                slots: list[Slot], link: Optional[str], tz: str) -> EmailDraft:
+                slots: list[Slot], link: Optional[str], tz: str,
+                signal_types: dict[str, SignalTypeDef] = DEFAULT_SIGNAL_TYPES) -> EmailDraft:
+    type_def = signal_types.get(card.signal_type)
     try:
-        copy = llm.chat_json(build_messages(card, company, sender), DraftCopy)
+        copy = llm.chat_json(build_messages(card, company, sender, type_def), DraftCopy)
     except LLMError as e:
         log.warning("outbound LLM failed, using template: %s", e)
-        copy = fallback_copy(card, company, sender)
+        copy = fallback_copy(card, company, sender, type_def)
     ask = build_ask(format_slots(slots, tz), link)
     body = (f"Hi {company} team,\n\n{_sentence(copy.opener)} {_sentence(copy.value)}\n\n{ask}\n\n"
             f"{sender.name}\n{sender.company}")

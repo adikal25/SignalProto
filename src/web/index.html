@@ -79,7 +79,7 @@
   .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
   .co { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .sub { color: var(--muted); font-size: 12px; }
   .snip { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chip { display: inline-block; font-size: 11.5px; font-weight: 550; padding: 1px 8px; border-radius: 99px; margin-right: 4px; }
+  .chip { display: inline-block; font-size: 11.5px; font-weight: 550; padding: 1px 8px; border-radius: 99px; margin-right: 4px; color: var(--ink); background: var(--soft); }
   .chip.hiring { color: var(--hire); background: var(--hire-bg); }
   .chip.expansion { color: var(--exp); background: var(--exp-bg); }
   .chip.stale { color: var(--muted); background: var(--soft); }
@@ -200,7 +200,7 @@ function ago(iso) {
 }
 const grade = (sc) => `<span class="grade ${sc.tier}" title="Fit ${sc.fit.toFixed(0)} · Intent ${sc.intent.toFixed(0)}"><b>${esc(sc.grade)}</b>${sc.tier}</span>`;
 const fmtPts = (n) => (n > 0 ? "+" : "") + n.toFixed(0);
-const chips = (types) => [...new Set(types)].sort().map((t) => `<span class="chip ${t}">${t}</span>`).join("");
+const chips = (types) => [...new Set(types)].sort().map((t) => `<span class="chip ${esc(t)}">${esc(t).replace(/_/g, " ")}</span>`).join("");
 
 async function loadHealth() {
   try {
