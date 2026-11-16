@@ -3,6 +3,8 @@
 python -m src.app run --csv data/companies.sample.csv     # track + run these accounts once
 python -m src.app watch [--sync-crm]                      # the scheduled loop (cron / launchd)
 python -m src.app prospects                               # ranked list
+python -m src.app export --out signals.xlsx               # Excel workbook (prospects, signals, outreach)
+python -m src.app watch --export data/prospects.xlsx      # refresh the workbook after every sweep
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import json
 import logging
 import sys
 
+from src.export import default_filename, export_file
 from src.graph import Deps, Pipeline
 from src.integrations.crm import account_from_row
 from src.settings import load_settings
@@ -37,6 +40,12 @@ def cmd_watch(pipeline: Pipeline, args: argparse.Namespace) -> None:
         print(f"  + {n.company or n.domain}: {n.card.signal_type} {n.card.confidence:.2f}  {n.card.snippet[:100]}")
     for domain, err in report.errors.items():
         print(f"  ! {domain}: {err}", file=sys.stderr)
+    if args.export:
+        print(f"workbook updated: {export_file(pipeline, args.export)}")
+
+
+def cmd_export(pipeline: Pipeline, args: argparse.Namespace) -> None:
+    print(f"wrote {export_file(pipeline, args.out or default_filename())}")
 
 
 def cmd_prospects(pipeline: Pipeline, args: argparse.Namespace) -> None:
@@ -64,6 +73,10 @@ def main() -> None:
 
     watch = sub.add_parser("watch", help="re-check all tracked accounts; alert on new signals")
     watch.add_argument("--sync-crm", action="store_true")
+    watch.add_argument("--export", metavar="PATH", help="rewrite this .xlsx after the sweep")
+
+    export = sub.add_parser("export", help="write an Excel workbook of prospects, signals and outreach")
+    export.add_argument("--out", help="default: signalproto-YYYY-MM-DD.xlsx")
 
     prospects = sub.add_parser("prospects", help="print the ranked prospect list")
     prospects.add_argument("--json", action="store_true")
@@ -72,7 +85,7 @@ def main() -> None:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
     pipeline = Pipeline(Deps.from_settings(load_settings(args.config)))
-    {"run": cmd_run, "watch": cmd_watch, "prospects": cmd_prospects}[args.command](pipeline, args)
+    {"run": cmd_run, "watch": cmd_watch, "prospects": cmd_prospects, "export": cmd_export}[args.command](pipeline, args)
 
 
 if __name__ == "__main__":
