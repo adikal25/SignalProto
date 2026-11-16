@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, EmailStr, Field
 
 from src.crawler import crawl
+from src.export import XLSX_MEDIA_TYPE, default_filename, export_bytes
 from src.graph import DetectedSignal, Deps, Pipeline
 from src.integrations.booking import BookingNotSupported
 from src.integrations.crm import Account
@@ -128,6 +129,13 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     def watch(req: WatchRequest, p: Pipeline = Depends(pipeline)) -> WatchReport:
         """Pull CRM accounts, re-check every tracked account, alert on new signals."""
         return run_watch(p, sync_crm=req.sync_crm)
+
+    @app.get("/export.xlsx", response_class=Response,
+             responses={200: {"content": {XLSX_MEDIA_TYPE: {}}, "description": "Excel workbook"}})
+    def export(p: Pipeline = Depends(pipeline)) -> Response:
+        """Download prospects (ranked), every signal, and every outreach draft as an Excel workbook."""
+        return Response(content=export_bytes(p), media_type=XLSX_MEDIA_TYPE,
+                        headers={"Content-Disposition": f'attachment; filename="{default_filename()}"'})
 
     @app.get("/prospects", response_model=list[Prospect])
     def prospects(include_empty: bool = False, p: Pipeline = Depends(pipeline)) -> list[Prospect]:

@@ -37,7 +37,7 @@ Mean verification latency is about 0.6 s per candidate on an Apple-silicon lapto
 
 ```bash
 # crontab: every weekday at 7am
-0 7 * * 1-5  cd /path/to/SignalProto && .venv/bin/python -m src.app watch --sync-crm
+0 7 * * 1-5  cd /path/to/SignalProto && .venv/bin/python -m src.app watch --sync-crm --export data/prospects.xlsx
 ```
 
 **Account scoring.** Modelled on how B2B teams score accounts in practice (HubSpot / MadKudu / Marketo-style fit × intent grading), not one blended number:
@@ -69,9 +69,10 @@ python -m eval.run_eval --model llama3.2:3b --write-baseline  # accept new score
 - **Bring your own key:** per-agent provider choice; keys come from environment variables only (see below).
 - **Meeting booking:** Cal.com v2 (live slots spread across days, plus `POST /meetings/book`) or any scheduling link. Slots are inserted by code, so the model can't invent a time.
 - **CRM adapters:** HubSpot (pull companies with size and industry, write notes on the company record), a generic webhook (Zapier, Make or n8n into Salesforce, Pipedrive, Attio and others), and CSV. Adding a CRM means implementing two methods.
+- **Excel export, no CRM needed:** one click (or `GET /export.xlsx`) downloads a workbook with ranked **Prospects** (grade, tier, next action, evidence), every **Signal** (active and stale) and every **Outreach** draft with its sent date. `watch --export` keeps a shared workbook current after each scheduled sweep. Text from websites is always written as plain text, so a page can't plant a working formula in your spreadsheet.
 - **SQLite store** with versioned migrations: accounts, page snapshots, signals, outreach drafts, LLM calls.
 - **Dashboard** served by the API at `/`, with no build step and no extra dependencies.
-- **Tests:** 64 pytest tests, with every LLM and HTTP call faked.
+- **Tests:** 69 pytest tests, with every LLM and HTTP call faked.
 
 ## Quickstart
 
@@ -93,6 +94,8 @@ uvicorn src.api.main:app --reload                       # dashboard at /, API do
 python -m src.app run --csv data/companies.sample.csv   # columns: domain, company, [employees], [vertical]
 python -m src.app watch --sync-crm                      # the scheduled loop
 python -m src.app prospects                             # ranked list in the terminal
+python -m src.app export --out prospects.xlsx           # Excel workbook
+python -m src.app watch --export data/prospects.xlsx    # scheduled sweep that also refreshes the workbook
 ```
 
 | Method | Path | Purpose |
@@ -102,6 +105,7 @@ python -m src.app prospects                             # ranked list in the ter
 | POST | `/pipeline/run` | Track an account and run it (`force`, `sync_crm` optional) |
 | POST | `/watch/run` | Sweep all tracked accounts, alert on new signals |
 | GET | `/prospects` | Ranked prospects with score breakdowns |
+| GET | `/export.xlsx` | Download prospects, signals and outreach as an Excel workbook |
 | GET | `/prospects/detail?domain=` | Signals, stale signals, outreach drafts |
 | POST | `/outreach/{id}/sent` | Mark a draft as sent (starts the contact cooldown) |
 | GET | `/traces?trace_id=` | Logged LLM calls |
@@ -158,6 +162,7 @@ src/
   web/index.html           dashboard
   graph.py                 LangGraph pipeline, change detection, dependency wiring
   watch.py                 scheduled sweep, alerts, ranked prospects
+  export.py                Excel workbook export
   scoring.py               prospect score
   store.py                 SQLite store + migrations
   crawler.py               deterministic fetcher
