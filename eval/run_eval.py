@@ -6,6 +6,7 @@ local-LLM verification adds. A prediction counts as correct only if the signal T
     python -m eval.run_eval --model llama3.2:3b --record          # live model, save outputs to a cassette
     python -m eval.run_eval --model llama3.2:3b --replay --gate   # CI: no model server, fail on regression
     python -m eval.run_eval --model llama3.2:3b --write-baseline  # accept current scores as the new bar
+    python -m eval.run_eval --provider anthropic --model claude-opus-5-5 --record   # BYOK: your key, same eval
 """
 from __future__ import annotations
 
@@ -18,7 +19,9 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from src.llm.ollama_runtime import LLM, OllamaChat, OllamaConfig
+from src.llm.base import LLM
+from src.llm.providers import make_llm
+from src.settings import LLMSettings
 from src.llm.tracing import RecordingLLM, ReplayLLM
 from src.schemas import Candidate
 from src.signals.agent import verify
@@ -58,6 +61,8 @@ def metrics(gold: list[str], pred: list[Optional[str]]) -> Metrics:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="llama3.2:3b")
+    ap.add_argument("--provider", default="ollama", help="ollama | anthropic | openai | groq | openrouter | gemini")
+    ap.add_argument("--max-tokens", type=int, default=None, help="default 200 locally, 4096 for hosted providers")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--record", action="store_true", help="call the live model and save a cassette")
     mode.add_argument("--replay", action="store_true", help="serve outputs from the cassette (no model server)")
@@ -67,13 +72,17 @@ def main() -> None:
     args = ap.parse_args()
 
     examples = [Example.model_validate_json(line) for line in DATA.read_text().splitlines() if line.strip()]
-    slug = args.model.replace(":", "_").replace("/", "_")
+    model_slug = args.model.replace(":", "_").replace("/", "_")
+    slug = model_slug if args.provider == "ollama" else f"{args.provider}_{model_slug}"
+    baseline_key = args.model if args.provider == "ollama" else f"{args.provider}/{args.model}"
     cassette = CASSETTES_DIR / f"{slug}.jsonl"
     llm: LLM
     if args.replay:
         llm = ReplayLLM(cassette)
     else:
-        llm = OllamaChat(OllamaConfig(model_id=args.model, max_new_tokens=200, temperature=0.0))
+        max_tokens = args.max_tokens or (200 if args.provider == "ollama" else 4096)
+        llm = make_llm(LLMSettings(provider=args.provider, model_id=args.model, max_new_tokens=max_tokens,
+                                   temperature=0.0, effort="low" if args.provider == "anthropic" else None))
         if args.record:
             llm = RecordingLLM(llm, cassette)
 
@@ -111,7 +120,7 @@ def main() -> None:
         out.write_text(json.dumps(report, indent=2))
 
     kb, sa = report["keyword_baseline"], report["signal_agent"]
-    print(f"model={args.model}  n={report['n']} ({report['n_positive']} positive)")
+    print(f"model={baseline_key}  n={report['n']} ({report['n_positive']} positive)")
     print(f"{'':16}{'precision':>10}{'recall':>8}{'f1':>7}{'fp':>5}")
     print(f"{'keyword':16}{kb['precision']:>10}{kb['recall']:>8}{kb['f1']:>7}{kb['fp']:>5}")
     print(f"{'signal agent':16}{sa['precision']:>10}{sa['recall']:>8}{sa['f1']:>7}{sa['fp']:>5}")
@@ -119,11 +128,11 @@ def main() -> None:
 
     baselines = json.loads(BASELINE.read_text()) if BASELINE.exists() else {}
     if args.write_baseline:
-        baselines[args.model] = {k: sa[k] for k in ("precision", "recall", "f1")}
+        baselines[baseline_key] = {k: sa[k] for k in ("precision", "recall", "f1")}
         BASELINE.write_text(json.dumps(baselines, indent=2) + "\n")
         print(f"baseline for {args.model} updated")
     if args.gate:
-        sys.exit(gate(sa, baselines.get(args.model), args.tolerance))
+        sys.exit(gate(sa, baselines.get(baseline_key), args.tolerance))
 
 
 def gate(current: dict, baseline: Optional[dict], tolerance: float) -> int:

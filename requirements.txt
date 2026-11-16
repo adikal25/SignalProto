@@ -6,6 +6,7 @@ langgraph==0.2.28
 pydantic==2.8.2
 PyYAML==6.0.2
 requests==2.32.3
+anthropic==2.8.0      # only used when a BYOK agent is set to provider: anthropic
 beautifulsoup4==4.12.3
 lxml==5.3.0
 dateparser==1.2.0

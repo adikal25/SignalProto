@@ -1,6 +1,6 @@
 # SignalProto
 
-Open-source multi-agent prospecting on **local models**. A **signal agent** watches prospect websites for hiring and expansion triggers. An **outbound agent** drafts a grounded email that offers **real meeting slots**. Results are ranked, traced and written back to your **CRM**. Everything runs behind a **FastAPI** REST API on Ollama, so there is no per-call API cost.
+Open-source multi-agent prospecting on **local models**. A **signal agent** watches prospect websites for hiring and expansion triggers. An **outbound agent** drafts a grounded email that offers **real meeting slots**. Results are ranked, traced and written back to your **CRM**. Everything runs behind a **FastAPI** REST API on local Ollama models by default, so there is no per-call API cost. Or **bring your own key** for Claude, OpenAI, Groq, OpenRouter, Gemini or any OpenAI-compatible server, separately for each agent.
 
 ```
 CRM accounts ─► watch (daily) ─► changed pages only ─► signal agent ─► new signals ─► gate ─► outbound agent (+ live slots) ─► CRM note / alert
@@ -65,12 +65,13 @@ python -m eval.run_eval --model llama3.2:3b --write-baseline  # accept new score
 
 ## Features
 - **LangGraph pipeline:** crawl → signal agent → gate → outbound agent → CRM sync (see [flow.md](flow.md)).
-- **Structured outputs:** the LLM is constrained to Pydantic JSON schemas through Ollama's `format`, so there is no regex-parsing of model text.
+- **Structured outputs on every provider:** the model is constrained to Pydantic JSON schemas (Ollama `format`, Claude structured outputs, OpenAI-style `response_format`), so there is no regex-parsing of model text.
+- **Bring your own key:** per-agent provider choice; keys come from environment variables only (see below).
 - **Meeting booking:** Cal.com v2 (live slots spread across days, plus `POST /meetings/book`) or any scheduling link. Slots are inserted by code, so the model can't invent a time.
 - **CRM adapters:** HubSpot (pull companies with size and industry, write notes on the company record), a generic webhook (Zapier, Make or n8n into Salesforce, Pipedrive, Attio and others), and CSV. Adding a CRM means implementing two methods.
 - **SQLite store** with versioned migrations: accounts, page snapshots, signals, outreach drafts, LLM calls.
 - **Dashboard** served by the API at `/`, with no build step and no extra dependencies.
-- **Tests:** 46 pytest tests, with the LLM and HTTP faked.
+- **Tests:** 64 pytest tests, with every LLM and HTTP call faked.
 
 ## Quickstart
 
@@ -108,6 +109,36 @@ python -m src.app prospects                             # ranked list in the ter
 | GET | `/meetings/slots` | Open slots from the booking provider |
 | POST | `/meetings/book` | Book a slot (Cal.com) |
 
+## Models: local or bring your own key
+
+Each agent picks its own provider in `configs/config.yml`, so you can mix them. For example, keep the high-volume signal checks on a free local model and write emails with your own Claude key:
+
+```yaml
+llm:
+  signal:   {provider: ollama, model_id: llama3.2:3b, max_new_tokens: 200}
+  outbound: {provider: anthropic, model_id: claude-opus-5-5, max_new_tokens: 4096, effort: low}
+```
+
+| `provider` | Key variable | Notes |
+|---|---|---|
+| `ollama` (default) | none | Local, no per-call cost |
+| `anthropic` | `ANTHROPIC_API_KEY` | Official `anthropic` SDK with structured outputs. `effort` controls reasoning depth. Refusals fall back to another model server-side on models that support it |
+| `openai` | `OPENAI_API_KEY` | |
+| `groq` | `GROQ_API_KEY` | |
+| `openrouter` | `OPENROUTER_API_KEY` | |
+| `gemini` | `GEMINI_API_KEY` | Google's OpenAI-compatible endpoint |
+| `openai_compatible` | `LLM_API_KEY` or your `api_key_env` | Needs `base_url`: vLLM, LM Studio, Together, a corporate gateway, ... |
+
+- **Keys:** read only from the environment. They are never written to config, the database, logs or API responses. `/health` and the dashboard show only whether each agent's key is set.
+- **Misconfiguration:** a hosted agent without its key makes the API answer `503 configuration error: ... needs an API key in $ANTHROPIC_API_KEY` rather than failing mid-run.
+- **Usage:** every call logs its provider plus input and output tokens (Agent activity tab, `GET /traces`), so hosted usage is visible per run.
+- **Comparing models:** the eval runs against any provider, so you can compare your key's model with the local one on the same labeled set:
+
+```bash
+export ANTHROPIC_API_KEY=...
+python -m eval.run_eval --provider anthropic --model claude-opus-5-5 --record --write-baseline
+```
+
 ## Configuration
 `configs/config.yml` covers crawl paths, gate, freshness, models, sender, booking, CRM, storage, alerts and scoring/ICP. Secrets come only from the environment:
 
@@ -118,6 +149,7 @@ python -m src.app prospects                             # ranked list in the ter
 | `HUBSPOT_TOKEN` | `crm.provider: hubspot` (private-app token: companies read, notes write) |
 | `SIGNALPROTO_CONFIG` | alternate config path |
 | `SIGNALPROTO_DB` | alternate database path (e.g. `data/demo.db`) |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `LLM_API_KEY` | bring-your-own-key providers (see above) |
 
 ## Layout
 ```text
@@ -135,7 +167,9 @@ src/
   agents/outbound.py       outbound agent
   integrations/crm.py      HubSpot / webhook / CSV
   integrations/booking.py  Cal.com / link
+  llm/base.py              LLM interface, errors, token usage
   llm/ollama_runtime.py    Ollama client with JSON-schema outputs
+  llm/providers.py         bring-your-own-key providers (Anthropic SDK, OpenAI-compatible)
   llm/tracing.py           call tracing, record / replay
 eval/                      labeled set, harness, cassettes, baseline, results
 demo/                      fixture sites + seed script

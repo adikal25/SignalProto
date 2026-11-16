@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "config.yml"
 
@@ -30,10 +30,25 @@ class FreshnessSettings(BaseModel):
     floor: float = Field(default=0.3, ge=0, le=1)
 
 
+ProviderName = Literal["ollama", "anthropic", "openai", "groq", "openrouter", "gemini", "openai_compatible"]
+
+
 class LLMSettings(BaseModel):
+    """One agent's model. `provider: ollama` runs locally; anything else is bring-your-own-key.
+
+    Keys are never stored in YAML: each hosted provider reads its key from an environment
+    variable (see src/llm/providers.py), or from `api_key_env` if you name one.
+    """
+    model_config = ConfigDict(protected_namespaces=())  # allow the `model_id` field name
+
+    provider: ProviderName = "ollama"
     model_id: str = "llama3.2:3b"
-    max_new_tokens: int = 300
-    temperature: float = 0.0
+    max_new_tokens: int = 300  # hosted models with built-in reasoning need room: use >= 4096 for anthropic
+    temperature: Optional[float] = 0.0  # null to omit (some hosted reasoning models reject it); ignored by anthropic (current Claude models don't take sampling params)
+    base_url: Optional[str] = None     # required for openai_compatible (vLLM, LM Studio, Together, ...)
+    api_key_env: Optional[str] = None  # override the provider's default key variable
+    effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None  # anthropic only
+    timeout_seconds: int = 120
 
 
 class LLMGroup(BaseModel):

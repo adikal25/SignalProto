@@ -13,7 +13,7 @@ from src.api.main import create_app
 from src.graph import Deps, Pipeline
 from src.integrations.booking import NoBooker
 from src.integrations.crm import Account
-from src.llm.ollama_runtime import LLMError
+from src.llm.base import LLMError
 from src.llm.tracing import CassetteMiss, RecordingLLM, ReplayLLM, TracedLLM, prompt_version
 from src.schemas import SignalVerdict
 from src.scoring import score_fit, score_intent, score_prospect

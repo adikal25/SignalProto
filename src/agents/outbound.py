@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-from src.llm.ollama_runtime import LLM, LLMError
+from src.llm.base import LLM, LLMError
 from src.schemas import EmailDraft, EvidenceCard, Slot
 from src.settings import SenderSettings
 

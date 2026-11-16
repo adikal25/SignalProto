@@ -75,6 +75,12 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE outreach ADD COLUMN sent_at TEXT;
     """,
+    # 3: bring-your-own-key providers: record who served each call and what it cost in tokens.
+    """
+    ALTER TABLE llm_calls ADD COLUMN provider TEXT NOT NULL DEFAULT 'ollama';
+    ALTER TABLE llm_calls ADD COLUMN input_tokens INTEGER;
+    ALTER TABLE llm_calls ADD COLUMN output_tokens INTEGER;
+    """,
 ]
 
 
@@ -129,6 +135,9 @@ class LLMCallRow(BaseModel):
     error: Optional[str]
     latency_ms: int
     created_at: datetime
+    provider: str = "ollama"
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
 
 
 class Store:
@@ -289,13 +298,15 @@ class Store:
 
     def log_llm_call(self, *, trace_id: Optional[str], node: str, model: str, prompt_version: str,
                      input_hash: str, input: str, output: Optional[str], error: Optional[str],
-                     latency_ms: int) -> None:
+                     latency_ms: int, provider: str = "ollama", input_tokens: Optional[int] = None,
+                     output_tokens: Optional[int] = None) -> None:
         with self._conn() as c:
             c.execute(
                 """INSERT INTO llm_calls (trace_id, node, model, prompt_version, input_hash, input, output,
-                                          error, latency_ms, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (trace_id, node, model, prompt_version, input_hash, input, output, error, latency_ms, utcnow()),
+                                          error, latency_ms, created_at, provider, input_tokens, output_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (trace_id, node, model, prompt_version, input_hash, input, output, error, latency_ms, utcnow(),
+                 provider, input_tokens, output_tokens),
             )
 
     def llm_calls(self, trace_id: Optional[str] = None, limit: int = 100) -> list[LLMCallRow]:

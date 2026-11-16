@@ -3,20 +3,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Any
 
 import requests
-from pydantic import BaseModel
 
-T = TypeVar("T", bound=BaseModel)
+from src.llm.base import LLM, LLMError, T, Usage, last_usage
 
-
-class LLM(Protocol):
-    def chat_json(self, messages: list[dict[str, str]], schema: type[T]) -> T: ...
-
-
-class LLMError(RuntimeError):
-    pass
+__all__ = ["LLM", "LLMError", "OllamaChat", "OllamaConfig", "ollama_base_url", "ollama_health"]
 
 
 @dataclass
@@ -32,6 +25,8 @@ def ollama_base_url() -> str:
 
 
 class OllamaChat:
+    provider = "ollama"
+
     def __init__(self, cfg: OllamaConfig):
         self.cfg = cfg
         self.base_url = ollama_base_url()
@@ -48,8 +43,9 @@ class OllamaChat:
         try:
             r = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=self.cfg.timeout_seconds)
             r.raise_for_status()
-            content = r.json()["message"]["content"]
-            return schema.model_validate_json(content)
+            body = r.json()
+            last_usage.set(Usage(body.get("prompt_eval_count"), body.get("eval_count")))
+            return schema.model_validate_json(body["message"]["content"])
         except Exception as e:  # network, HTTP, malformed or truncated JSON
             raise LLMError(f"{self.cfg.model_id}: {e}") from e
 

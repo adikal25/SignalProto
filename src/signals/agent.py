@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from src.llm.ollama_runtime import LLM, LLMError
+from src.llm.base import LLM, LLMError
 from src.schemas import Candidate, EvidenceCard, Page, SignalVerdict
 from src.settings import FreshnessSettings
 from src.signals.keyword import candidates_from_pages

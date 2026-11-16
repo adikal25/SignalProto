@@ -163,7 +163,7 @@
 
     <section id="activityView" hidden>
       <div class="card"><table>
-        <thead><tr><th style="width:84px">Time</th><th style="width:130px">Agent</th><th style="width:110px">Model</th><th style="width:120px">Prompt</th><th style="width:84px">Latency</th><th>Input</th><th style="width:240px">Result</th></tr></thead>
+        <thead><tr><th style="width:84px">Time</th><th style="width:130px">Agent</th><th style="width:150px">Model</th><th style="width:110px">Prompt</th><th style="width:80px">Latency</th><th style="width:90px" title="input / output tokens">Tokens</th><th>Input</th><th style="width:240px">Result</th></tr></thead>
         <tbody id="traceRows"></tbody>
       </table></div>
     </section>
@@ -204,14 +204,23 @@ const chips = (types) => [...new Set(types)].sort().map((t) => `<span class="chi
 async function loadHealth() {
   try {
     const h = await api("/health");
-    const ok = h.ollama.reachable && !h.ollama.missing_models.length;
+    const ready = (a) => a.provider === "ollama"
+      ? !!h.ollama && h.ollama.reachable && !h.ollama.missing_models.includes(a.model)
+      : a.key_configured;
+    const agentPill = (label, a) => {
+      const local = a.provider === "ollama";
+      const tip = local ? "Runs on local Ollama" : `Bring your own key: ${a.key_env} ${a.key_configured ? "is set" : "is NOT set"}`;
+      return `<span class="pill" title="${esc(tip)}"><span class="dot ${ready(a) ? "ok" : "bad"}"></span>${label} · ${esc(a.model)}${local ? "" : ` <span class="sub">(${esc(a.provider)})</span>`}</span>`;
+    };
     $("#pills").innerHTML = [
-      `<span class="pill"><span class="dot ${ok ? "ok" : "bad"}"></span>Ollama · ${esc(h.models.signal)}</span>`,
+      agentPill("Signal", h.agents.signal), agentPill("Outbound", h.agents.outbound),
       `<span class="pill"><span class="dot ${h.crm !== "none" ? "ok" : ""}"></span>CRM · ${esc(h.crm)}</span>`,
       `<span class="pill"><span class="dot ${h.booking !== "none" ? "ok" : ""}"></span>Booking · ${esc(h.booking)}</span>`,
       `<span class="pill"><span class="dot ${h.alerts ? "ok" : ""}"></span>Alerts</span>`,
     ].join("");
-  } catch { $("#pills").innerHTML = `<span class="pill"><span class="dot bad"></span>API unreachable</span>`; }
+  } catch (err) {
+    $("#pills").innerHTML = `<span class="pill" title="${esc(err.message)}"><span class="dot bad"></span>${esc(err.message.startsWith("configuration error") ? err.message : "API unreachable")}</span>`;
+  }
 }
 
 async function loadProspects() {
@@ -289,10 +298,12 @@ async function loadTraces() {
                              : `<span class="sub">${esc(o.subject || "")}</span>`;
     }
     const input = c.input.includes("SENTENCE: ") ? c.input.split("SENTENCE: ").pop() : c.input.split("\n")[0];
-    return `<tr><td class="sub nowrap">${ago(c.created_at)}</td><td class="nowrap">${esc(c.node.replace("_", " "))}</td><td class="mono">${esc(c.model)}</td>
-      <td class="mono">${esc(c.prompt_version)}</td><td class="num nowrap">${c.latency_ms} ms</td>
+    const tokens = c.input_tokens == null ? "–" : `${c.input_tokens} / ${c.output_tokens ?? "–"}`;
+    const model = c.provider === "ollama" ? esc(c.model) : `<span class="sub">${esc(c.provider)}/</span>${esc(c.model)}`;
+    return `<tr><td class="sub nowrap">${ago(c.created_at)}</td><td class="nowrap">${esc(c.node.replace("_", " "))}</td><td class="mono">${model}</td>
+      <td class="mono">${esc(c.prompt_version)}</td><td class="num nowrap">${c.latency_ms} ms</td><td class="num nowrap sub">${tokens}</td>
       <td><div class="snip" title="${esc(input)}">${esc(input)}</div></td><td>${result}</td></tr>`;
-  }).join("") : `<tr><td colspan="7"><div class="empty">No LLM calls logged yet.</div></td></tr>`;
+  }).join("") : `<tr><td colspan="8"><div class="empty">No LLM calls logged yet.</div></td></tr>`;
 }
 
 $("#runForm").onsubmit = async (e) => {
