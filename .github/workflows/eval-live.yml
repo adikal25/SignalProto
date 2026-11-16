@@ -29,7 +29,7 @@ jobs:
           curl -fsSL https://ollama.com/install.sh | sh
           sudo systemctl stop ollama || true   # run our own server so models land in the cached ~/.ollama
           (ollama serve > /tmp/ollama.log 2>&1 &)
-          for i in $(seq 1 30); do curl -sf localhost:11434/api/tags && break; sleep 1; done
+          for _ in $(seq 1 30); do curl -sf localhost:11434/api/tags && break; sleep 1; done
           ollama pull llama3.2:3b
       # CPU inference can differ slightly from the recording machine; --tolerance absorbs that.
       - name: Live eval gate

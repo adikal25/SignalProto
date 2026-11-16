@@ -85,18 +85,44 @@ class AlertSettings(BaseModel):
     webhook_url: Optional[str] = None
 
 
+class SizeBand(BaseModel):
+    min: int
+    max: int
+    points: float
+
+
 class ICPSettings(BaseModel):
-    min_employees: Optional[int] = None
-    max_employees: Optional[int] = None
+    """Ideal customer profile: drives the FIT score."""
+    size_bands: list[SizeBand] = [
+        SizeBand(min=1, max=4, points=10), SizeBand(min=5, max=49, points=60),
+        SizeBand(min=50, max=200, points=45), SizeBand(min=201, max=1000, points=15),
+    ]
+    unknown_size_points: float = 30
+    disqualify_above: Optional[int] = 5000
     verticals: list[str] = []
+    excluded_verticals: list[str] = []
+    vertical_points: float = 40
+
+
+class SignalTypeScoring(BaseModel):
+    base_value: float = Field(ge=0, le=1)   # what a fresh, certain, relevant signal is worth (0-1)
+    half_life_days: float = Field(gt=0)     # intent halves every N days
 
 
 class ScoringSettings(BaseModel):
-    """Transparent weighted prospect score. Component weights should sum to 1."""
-    type_weights: dict[str, float] = {"expansion": 1.0, "hiring": 0.8}
-    weights: dict[str, float] = {"signal": 0.45, "diversity": 0.15, "recency": 0.2, "size": 0.1, "fit": 0.1}
-    recency_weekly_decay: float = Field(default=0.85, gt=0, le=1)
+    """Fit x intent account scoring. See src/scoring.py."""
     icp: ICPSettings = ICPSettings()
+    signal_types: dict[str, SignalTypeScoring] = {
+        "expansion": SignalTypeScoring(base_value=0.75, half_life_days=60),  # openings stay relevant for months
+        "hiring": SignalTypeScoring(base_value=0.6, half_life_days=30),     # job posts go stale fast
+    }
+    # Signals mentioning these terms map directly to what you sell; others count at irrelevant_multiplier.
+    relevant_keywords: dict[str, list[str]] = {}
+    irrelevant_multiplier: float = Field(default=0.6, ge=0, le=1)
+    surge_window_days: int = 30
+    surge_bonus: float = Field(default=0.25, ge=0, le=1)  # share of the remaining gap a multi-signal surge closes
+    contact_cooldown_days: int = 21
+    cooldown_penalty: float = Field(default=0.5, ge=0, le=1)
 
 
 class Settings(BaseModel):

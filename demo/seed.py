@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -57,6 +59,34 @@ def main() -> None:
             r = pipeline.run(account)
             print(f"{account.company:<22} changed={len(r.changed_urls)} new={len(r.new_signals)} "
                   f"stale={r.stale_count} -> {'email drafted' if r.email else r.skipped_reason}")
+        if label == "week 1":
+            _simulate_time_passing(args.db, days=10)
+
+    # A rep sent Oak & Iron's draft 8 days ago: the contact cooldown should push it down the list.
+    oak = deps.store.outreach("oakironfitness.example")[-1]
+    deps.store.mark_outreach_sent(oak.id)
+    _shift(args.db, "UPDATE outreach SET sent_at = ? WHERE id = ?", [(_ago(8), oak.id)])
+
+
+def _ago(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+def _shift(db: str, sql: str, rows: list[tuple]) -> None:
+    with sqlite3.connect(db) as conn:
+        conn.executemany(sql, rows)
+
+
+def _simulate_time_passing(db: str, days: int) -> None:
+    """Demo only: backdate everything from the first run so decay and recency are visible."""
+    with sqlite3.connect(db) as conn:
+        for table, cols in [("signals", ["first_seen", "last_seen"]), ("outreach", ["created_at"]),
+                            ("page_snapshots", ["fetched_at"]), ("llm_calls", ["created_at"])]:
+            for col in cols:
+                rows = conn.execute(f"SELECT rowid, {col} FROM {table}").fetchall()
+                conn.executemany(f"UPDATE {table} SET {col} = ? WHERE rowid = ?", [
+                    ((datetime.fromisoformat(v) - timedelta(days=days)).isoformat(), rid) for rid, v in rows
+                ])
 
 
 if __name__ == "__main__":

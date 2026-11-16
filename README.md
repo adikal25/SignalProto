@@ -4,12 +4,12 @@ Open-source multi-agent prospecting on **local models**. A **signal agent** watc
 
 ```
 CRM accounts ─► watch (daily) ─► changed pages only ─► signal agent ─► new signals ─► gate ─► outbound agent (+ live slots) ─► CRM note / alert
-                                                                         └─► prospect score ─► ranked dashboard
+                                                                         └─► fit × intent score ─► A1-D4 grade ─► ranked dashboard
 ```
 
 ![Prospects dashboard](docs/screenshots/dashboard.png)
 
-<sub>Demo data from `python -m demo.seed`: fictional `.example` sites run through the real pipeline and a local `llama3.2:3b`. Bright Path Dental changed between two runs. Its new hiring post was picked up and the old announcement marked stale. Copper Kettle Bakery is missing because all of its keyword hits ("all positions have been filled", "our client just opened a new location") were rejected.</sub>
+<sub>Demo data from `python -m demo.seed`: fictional `.example` sites run through the real pipeline and a local `llama3.2:3b`. Two runs ten days apart: Bright Path Dental changed in between, so its new hiring post was picked up and the old announcement marked stale. Oak & Iron's draft was sent 8 days ago, so it sits in cooldown below accounts you can act on now. Summit Roofing grades D because 850 employees is outside the ICP. Copper Kettle Bakery is missing because all of its keyword hits ("all positions have been filled", "our client just opened a new location") were rejected.</sub>
 
 ![Agent activity](docs/screenshots/activity.png)
 
@@ -40,17 +40,15 @@ Mean verification latency is about 0.6 s per candidate on an Apple-silicon lapto
 0 7 * * 1-5  cd /path/to/SignalProto && .venv/bin/python -m src.app watch --sync-crm
 ```
 
-**Prospect scoring.** A transparent weighted sum, so every rank can be explained (see the breakdown in the dashboard):
+**Account scoring.** Modelled on how B2B teams score accounts in practice (HubSpot / MadKudu / Marketo-style fit × intent grading), not one blended number:
 
-| Component | Meaning |
-|---|---|
-| signal | strongest signal's confidence × type weight (expansion 1.0, hiring 0.8) |
-| diversity | share of signal types present (hiring *and* expansion beats either one) |
-| recency | weekly decay since the newest signal was first seen |
-| size | 1.0 inside the ICP employee range, 0.2 outside, 0.5 unknown |
-| fit | ICP vertical match; 0.5 when unknown or no preference |
+| | What it measures | How |
+|---|---|---|
+| **Fit** (0-100, graded A-D) | *Who they are* vs. your ICP | employee size bands + target vertical. Hard disqualifiers: excluded verticals, companies above `disqualify_above` |
+| **Intent** (0-100, graded 1-4) | *What they're doing now* | each signal = base value × confidence × relevance × decay. Decay uses a **per-type half-life** (hiring 30d, expansion 60d). Signals stack with **diminishing returns** (1 − ∏(1 − sᵢ)), and a **surge** bonus applies when different signal types land within 30 days. Hiring for roles you don't serve counts at 0.6× (`relevant_keywords`) |
+| **Priority** (0-100) | Ranking | √(fit × intent): a great fit with no intent, or loud intent from a bad fit, both rank low. Halved during a **contact cooldown** (21d after a draft is marked sent) |
 
-Weights and ICP settings live in `configs/config.yml`. Learned weights are the next step once there's outcome data (replies, meetings).
+The grade maps to a tier and a next step: **hot** (A/B fit with intent 1-2) means reach out today, **warm** means add to this week's sequence, **nurture** means keep watching, and **disqualified** means skip. Accounts in cooldown drop below everything you can act on now. Every point added or removed is listed as a reason in the dashboard. All weights and the ICP live under `scoring:` in `configs/config.yml`. Learned weights are the next step once there's outcome data (replies, meetings).
 
 **Observability and the CI eval gate.** Every LLM call is written to the `llm_calls` table and tagged with the run's trace id. The `prompt_version` is a hash of the system prompt plus few-shot examples, so editing a prompt changes it automatically. The eval runs in two modes:
 
@@ -72,7 +70,7 @@ python -m eval.run_eval --model llama3.2:3b --write-baseline  # accept new score
 - **CRM adapters:** HubSpot (pull companies with size and industry, write notes on the company record), a generic webhook (Zapier, Make or n8n into Salesforce, Pipedrive, Attio and others), and CSV. Adding a CRM means implementing two methods.
 - **SQLite store** with versioned migrations: accounts, page snapshots, signals, outreach drafts, LLM calls.
 - **Dashboard** served by the API at `/`, with no build step and no extra dependencies.
-- **Tests:** 38 pytest tests, with the LLM and HTTP faked.
+- **Tests:** 46 pytest tests, with the LLM and HTTP faked.
 
 ## Quickstart
 
@@ -104,6 +102,7 @@ python -m src.app prospects                             # ranked list in the ter
 | POST | `/watch/run` | Sweep all tracked accounts, alert on new signals |
 | GET | `/prospects` | Ranked prospects with score breakdowns |
 | GET | `/prospects/detail?domain=` | Signals, stale signals, outreach drafts |
+| POST | `/outreach/{id}/sent` | Mark a draft as sent (starts the contact cooldown) |
 | GET | `/traces?trace_id=` | Logged LLM calls |
 | POST | `/signals/detect` | Stateless crawl + signal agent (nothing stored) |
 | GET | `/meetings/slots` | Open slots from the booking provider |

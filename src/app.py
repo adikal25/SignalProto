@@ -46,7 +46,8 @@ def cmd_prospects(pipeline: Pipeline, args: argparse.Namespace) -> None:
         return
     for p in rows:
         types = ", ".join(sorted({s.signal_type for s in p.signals}))
-        print(f"{p.score.total:5.1f}  {p.account.company or p.account.domain:<30} {types}")
+        print(f"{p.score.grade:<3} {p.score.tier:<12} {p.score.priority:5.1f}  "
+              f"{p.account.company or p.account.domain:<28} {types:<20} {p.score.action}")
 
 
 def main() -> None:
