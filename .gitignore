@@ -81,3 +81,6 @@ results/
 tmp/
 temp/
 *.tmp
+# Local databases
+data/*.db
+data/*.db-*

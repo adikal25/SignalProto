@@ -1,19 +1,37 @@
 from datetime import datetime
-from typing import Optional, Literal, List, Dict
+from typing import Literal, Optional
+
 from pydantic import BaseModel, Field, HttpUrl
 
+SignalType = Literal["hiring", "expansion"]
 
-SignalType = Literal["expansion", "scheduler", "hiring"]
 
-
-class AgentResult(BaseModel):
-    ok: bool
-    why: List[str] = []
-    evidence_url: Optional[HttpUrl] = None
-    snippet: Optional[str] = None
+class Page(BaseModel):
+    """One fetched page of a prospect's website."""
+    url: str
+    path: str
+    text: str
     published_at: Optional[datetime] = None
-    confidence: float = 0.0
-    extra: dict = {}
+
+
+class Candidate(BaseModel):
+    """A sentence the keyword stage flagged as a possible signal (high recall, low precision)."""
+    url: str
+    sentence: str
+    context: str
+    keyword_type: SignalType
+    published_at: Optional[datetime] = None
+
+
+class SignalVerdict(BaseModel):
+    """Structured output the signal agent's LLM must return for each candidate."""
+    signal_type: Literal["hiring", "expansion", "none"]
+    strength: Literal["strong", "weak"]
+    # Required (not Optional): small models under a JSON-schema constraint almost always pick
+    # null for optional fields. "" means "not stated".
+    detail: str = Field(description='Role being hired for, or the new location/city; "" if not stated.')
+    reason: str = Field(description="One short sentence justifying the decision.")
+
 
 class EvidenceCard(BaseModel):
     signal_type: SignalType
@@ -21,24 +39,23 @@ class EvidenceCard(BaseModel):
     first_seen: datetime
     last_seen: datetime
     snippet: str = Field(max_length=320)
-    screenshot_path: Optional[str] = None
+    detail: Optional[str] = None
     confidence: float = Field(ge=0, le=1)
     explain: str
-    source_site: Optional[str] = None
-    location_guess: Optional[str] = None
 
 
-class ScrapeResult(BaseModel):
-    ok: bool
-    why: List[str] = []
-    pages: Dict[str, str] = {}         
-    urls: Dict[str, HttpUrl] = {}       
+class EmailDraft(BaseModel):
+    subject: str = Field(max_length=120)
+    body: str
+    call_to_action: str
 
-class ValidateResult(BaseModel):
-    ok: bool
-    why: List[str] = []
-    signal_type: Optional[str] = None                  
-    evidence_url: Optional[HttpUrl] = None
-    snippet: Optional[str] = None
-    published_at: Optional[datetime] = None
-    confidence: float = 0.0
+
+class Slot(BaseModel):
+    start: datetime
+
+
+class Booking(BaseModel):
+    id: str
+    start: datetime
+    status: str
+    attendee_email: str

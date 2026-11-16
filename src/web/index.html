@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignalProto</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1d1f; --muted: #6b6f76; --line: #e6e6e2;
+    --accent: #2f6fde; --accent-ink: #ffffff; --soft: #f0f2f6;
+    --hire: #7a4fd6; --hire-bg: #f1ecfc; --exp: #0f8a5f; --exp-bg: #e6f5ee;
+    --ok: #0f8a5f; --warn: #b7791f; --bad: #c53030;
+    --radius: 10px; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121315; --panel: #1a1b1e; --ink: #e8e8e6; --muted: #9a9ea6; --line: #2a2c30;
+      --accent: #5b8ff0; --soft: #22242a;
+      --hire: #b39af0; --hire-bg: #2a2340; --exp: #4cc79a; --exp-bg: #17302a;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  button, input { font: inherit; color: inherit; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px; }
+
+  header { border-bottom: 1px solid var(--line); background: var(--panel); }
+  header .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
+  .brand { font-weight: 650; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+  .brand i { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); display: inline-block; }
+  .pills { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .pill { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px;
+          display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+
+  a.btn { text-decoration: none; color: inherit; display: inline-block; }
+  .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  .btn:hover { background: var(--soft); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn:disabled { opacity: .55; cursor: progress; }
+  .btn.sm { padding: 4px 10px; font-size: 13px; }
+
+  main .wrap { padding-top: 24px; padding-bottom: 48px; }
+  .runbar { display: grid; grid-template-columns: 2fr 1.5fr .8fr 1fr auto auto; gap: 8px; align-items: center;
+            background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; box-shadow: var(--shadow); }
+  .runbar input { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 7px 10px; min-width: 0; }
+  .runbar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .runbar label { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
+  .stat b { display: block; font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
+  .stat span { color: var(--muted); font-size: 12px; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; cursor: pointer; color: var(--muted); }
+  .tab.active { color: var(--ink); border-color: var(--accent); font-weight: 550; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 16px; align-items: start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .nowrap { white-space: nowrap; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr.row { cursor: pointer; }
+  tbody tr.row:hover { background: var(--soft); }
+  tbody tr.row.selected { background: var(--soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .num { font-variant-numeric: tabular-nums; }
+  .score { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .bar { height: 6px; background: var(--soft); border-radius: 99px; overflow: hidden; flex: 1; min-width: 40px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .co { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .sub { color: var(--muted); font-size: 12px; }
+  .snip { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { display: inline-block; font-size: 11.5px; font-weight: 550; padding: 1px 8px; border-radius: 99px; margin-right: 4px; }
+  .chip.hiring { color: var(--hire); background: var(--hire-bg); }
+  .chip.expansion { color: var(--exp); background: var(--exp-bg); }
+  .chip.stale { color: var(--muted); background: var(--soft); }
+  .empty { padding: 48px 24px; text-align: center; color: var(--muted); }
+
+  .detail { position: sticky; top: 16px; padding: 18px; }
+  .detail h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
+  .detail h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; font-weight: 600; }
+  .breakdown { display: grid; grid-template-columns: 72px 1fr 34px; gap: 6px 10px; align-items: center; font-size: 13px; }
+  .breakdown span:first-child { color: var(--muted); }
+  .sig { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .sig p { margin: 6px 0 4px; }
+  .sig a { color: var(--accent); text-decoration: none; font-size: 12px; }
+  .email { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .email .subj { padding: 10px 12px; border-bottom: 1px solid var(--line); font-weight: 600; background: var(--soft); }
+  .email pre { margin: 0; padding: 12px; white-space: pre-wrap; font: inherit; }
+  .email .actions { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .err { color: var(--bad); }
+
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px); opacity: 0;
+           background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; transition: all .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 980px) {
+    table { table-layout: auto; }
+    .layout { grid-template-columns: 1fr; } .detail { position: static; }
+    .runbar { grid-template-columns: 1fr 1fr; } .stats { grid-template-columns: repeat(2, 1fr); }
+    .snip { max-width: 180px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="brand"><i></i>SignalProto</div>
+    <div class="pills" id="pills"></div>
+    <button class="btn sm" id="watchBtn" title="Re-check every tracked account; act only on new signals">Run watch</button>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <form class="runbar" id="runForm" autocomplete="off">
+      <input name="domain" placeholder="Domain, e.g. brightsmiles.com" required>
+      <input name="company" placeholder="Company name">
+      <input name="employees" type="number" min="0" placeholder="Employees">
+      <input name="vertical" placeholder="Vertical">
+      <label><input type="checkbox" name="force"> Re-read all</label>
+      <button class="btn primary" id="runBtn">Track &amp; run</button>
+    </form>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="prospects">Prospects</button>
+      <button class="tab" data-tab="activity">Agent activity</button>
+    </div>
+
+    <section id="prospectsView" class="layout">
+      <div class="card"><table>
+        <thead><tr><th style="width:120px">Score</th><th style="width:200px">Account</th><th style="width:110px">Signals</th><th>Latest evidence</th><th style="width:84px">Seen</th></tr></thead>
+        <tbody id="prospectRows"></tbody>
+      </table></div>
+      <aside class="card detail" id="detail"><div class="empty">Select a prospect to see why it ranks where it does.</div></aside>
+    </section>
+
+    <section id="activityView" hidden>
+      <div class="card"><table>
+        <thead><tr><th style="width:84px">Time</th><th style="width:130px">Agent</th><th style="width:110px">Model</th><th style="width:120px">Prompt</th><th style="width:84px">Latency</th><th>Input</th><th style="width:240px">Result</th></tr></thead>
+        <tbody id="traceRows"></tbody>
+      </table></div>
+    </section>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const REASONS = {
+  no_pages_fetched: "site unreachable", no_page_changes: "no page changes since last run",
+  no_verified_signal: "no verified signal", no_new_signals: "only known signals",
+  below_confidence_gate: "signal below confidence gate",
+};
+let selected = null;
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {headers: {"content-type": "application/json"}, ...opts});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove("show"), 3500);
+}
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 90) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+const chips = (types) => [...new Set(types)].sort().map((t) => `<span class="chip ${t}">${t}</span>`).join("");
+
+async function loadHealth() {
+  try {
+    const h = await api("/health");
+    const ok = h.ollama.reachable && !h.ollama.missing_models.length;
+    $("#pills").innerHTML = [
+      `<span class="pill"><span class="dot ${ok ? "ok" : "bad"}"></span>Ollama · ${esc(h.models.signal)}</span>`,
+      `<span class="pill"><span class="dot ${h.crm !== "none" ? "ok" : ""}"></span>CRM · ${esc(h.crm)}</span>`,
+      `<span class="pill"><span class="dot ${h.booking !== "none" ? "ok" : ""}"></span>Booking · ${esc(h.booking)}</span>`,
+      `<span class="pill"><span class="dot ${h.alerts ? "ok" : ""}"></span>Alerts</span>`,
+    ].join("");
+  } catch { $("#pills").innerHTML = `<span class="pill"><span class="dot bad"></span>API unreachable</span>`; }
+}
+
+async function loadProspects() {
+  const rows = await api("/prospects");
+  const signals = rows.flatMap((p) => p.signals);
+  const week = signals.filter((s) => Date.now() - new Date(s.first_seen) < 7 * 864e5).length;
+  $("#stats").innerHTML = [
+    [rows.length, "prospects with live signals"], [signals.length, "active signals"],
+    [week, "new this week"], [rows.length ? Math.round(rows[0].score.total) : "–", "top score"],
+  ].map(([b, s]) => `<div class="stat"><b class="num">${b}</b><span>${s}</span></div>`).join("");
+
+  $("#prospectRows").innerHTML = rows.length ? rows.map((p) => {
+    const top = p.signals[0];
+    const seen = p.signals.map((s) => s.last_seen).sort().pop();
+    return `<tr class="row ${p.account.domain === selected ? "selected" : ""}" data-domain="${esc(p.account.domain)}">
+      <td><div class="score num">${p.score.total.toFixed(0)}<div class="bar"><i style="width:${p.score.total}%"></i></div></div></td>
+      <td><div class="co">${esc(p.account.company || p.account.domain)}</div><div class="sub">${esc(p.account.domain)}</div></td>
+      <td>${chips(p.signals.map((s) => s.signal_type))}</td>
+      <td><div class="snip" title="${esc(top.snippet)}">${esc(top.snippet)}</div></td>
+      <td class="sub nowrap">${ago(seen)}</td></tr>`;
+  }).join("") : `<tr><td colspan="5"><div class="empty">No signals yet. Track a domain above to start.</div></td></tr>`;
+
+  document.querySelectorAll("tr.row").forEach((tr) => tr.onclick = () => showDetail(tr.dataset.domain));
+  if (!selected && rows.length) showDetail(rows[0].account.domain);
+}
+
+async function showDetail(domain) {
+  selected = domain;
+  document.querySelectorAll("tr.row").forEach((tr) => tr.classList.toggle("selected", tr.dataset.domain === domain));
+  const d = await api(`/prospects/detail?domain=${encodeURIComponent(domain)}`);
+  const {account, score, signals} = d.prospect;
+  const parts = ["signal", "diversity", "recency", "size", "fit"];
+  const email = d.outreach[0];
+  const meta = [account.employees && `${account.employees} employees`, account.vertical].filter(Boolean).join(" · ");
+  $("#detail").innerHTML = `
+    <h2>${esc(account.company || account.domain)}</h2>
+    <div class="sub">${esc(account.domain)}${meta ? " · " + esc(meta) : ""}</div>
+    <h3>Score ${score.total.toFixed(0)} / 100</h3>
+    <div class="breakdown">${parts.map((k) => `<span>${k}</span><div class="bar"><i style="width:${score[k] * 100}%"></i></div><span class="num sub">${score[k].toFixed(2)}</span>`).join("")}</div>
+    <h3>Signals</h3>
+    ${signals.map((s) => `<div class="sig">${chips([s.signal_type])}<span class="sub num">confidence ${s.confidence.toFixed(2)} · first seen ${ago(s.first_seen)}</span>
+      <p>“${esc(s.snippet)}”</p><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></div>`).join("") || `<div class="sub">No active signals.</div>`}
+    ${d.stale_signals.length ? `<div class="sub" style="margin-top:6px"><span class="chip stale">stale</span>${d.stale_signals.length} signal(s) no longer on the site</div>` : ""}
+    <h3>Outreach draft</h3>
+    ${email ? `<div class="email"><div class="subj">${esc(email.subject)}</div><pre>${esc(email.body)}</pre>
+      <div class="actions"><button class="btn sm" id="copyBtn">Copy</button>
+      <a class="btn sm" target="_blank" rel="noopener" href="https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(email.subject)}&body=${encodeURIComponent(email.body)}">Open in Gmail</a>
+      <span class="sub" style="margin-left:auto;align-self:center">${ago(email.created_at)}</span></div></div>`
+    : `<div class="sub">No draft. Outreach is written only for new signals above the confidence gate.</div>`}`;
+  const copy = $("#copyBtn");
+  if (copy) copy.onclick = async () => { await navigator.clipboard.writeText(`Subject: ${email.subject}\n\n${email.body}`); toast("Draft copied"); };
+}
+
+async function loadTraces() {
+  const calls = await api("/traces?limit=200");
+  $("#traceRows").innerHTML = calls.length ? calls.map((c) => {
+    let result = c.error ? `<span class="err">${esc(c.error.slice(0, 80))}</span>` : "";
+    if (!c.error) {
+      const o = JSON.parse(c.output);
+      result = o.signal_type ? (o.signal_type === "none" ? `<span class="sub">rejected</span>` : chips([o.signal_type]) + `<span class="sub">${esc(o.strength)}</span>`)
+                             : `<span class="sub">${esc(o.subject || "")}</span>`;
+    }
+    const input = c.input.includes("SENTENCE: ") ? c.input.split("SENTENCE: ").pop() : c.input.split("\n")[0];
+    return `<tr><td class="sub nowrap">${ago(c.created_at)}</td><td class="nowrap">${esc(c.node.replace("_", " "))}</td><td class="mono">${esc(c.model)}</td>
+      <td class="mono">${esc(c.prompt_version)}</td><td class="num nowrap">${c.latency_ms} ms</td>
+      <td><div class="snip" title="${esc(input)}">${esc(input)}</div></td><td>${result}</td></tr>`;
+  }).join("") : `<tr><td colspan="7"><div class="empty">No LLM calls logged yet.</div></td></tr>`;
+}
+
+$("#runForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target), btn = $("#runBtn");
+  const body = {domain: f.get("domain").trim(), company: f.get("company").trim() || null,
+                employees: f.get("employees") ? Number(f.get("employees")) : null,
+                vertical: f.get("vertical").trim() || null, force: f.get("force") === "on"};
+  btn.disabled = true; btn.textContent = "Running…";
+  try {
+    const r = await api("/pipeline/run", {method: "POST", body: JSON.stringify(body)});
+    const n = r.signals.filter((s) => s.is_new).length;
+    toast(`${r.domain}: ${n} new signal${n === 1 ? "" : "s"}` + (r.email ? " · email drafted" : r.skipped_reason ? ` · ${REASONS[r.skipped_reason] || r.skipped_reason}` : ""));
+    selected = r.domain; e.target.reset();
+    await Promise.all([loadProspects(), loadTraces()]);
+    if (r.signals.length) showDetail(r.domain);
+  } catch (err) { toast(`Run failed: ${err.message}`); }
+  finally { btn.disabled = false; btn.textContent = "Track & run"; }
+};
+
+$("#watchBtn").onclick = async () => {
+  const btn = $("#watchBtn"); btn.disabled = true; btn.textContent = "Watching…";
+  try {
+    const r = await api("/watch/run", {method: "POST", body: "{}"});
+    toast(`Checked ${r.accounts_checked} accounts · ${r.pages_changed} changed pages · ${r.new_signals.length} new signals`);
+    await Promise.all([loadProspects(), loadTraces()]);
+  } catch (err) { toast(`Watch failed: ${err.message}`); }
+  finally { btn.disabled = false; btn.textContent = "Run watch"; }
+};
+
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
+  history.replaceState(null, "", t.dataset.tab === "prospects" ? location.pathname : "#activity");
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+  $("#prospectsView").hidden = t.dataset.tab !== "prospects";
+  $("#activityView").hidden = t.dataset.tab !== "activity";
+  if (t.dataset.tab === "activity") loadTraces();
+});
+
+loadHealth(); loadProspects(); loadTraces();
+if (location.hash === "#activity") document.querySelector('[data-tab="activity"]').click();
+</script>
+</body>
+</html>
