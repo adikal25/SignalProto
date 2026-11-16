@@ -12,15 +12,34 @@ freshness:
   weekly_decay: 0.65 # focusing more on recency
   floor: 0.3
 
+# Models per agent. provider: ollama (local, default) or bring-your-own-key:
+#   anthropic (ANTHROPIC_API_KEY) | openai (OPENAI_API_KEY) | groq (GROQ_API_KEY)
+#   openrouter (OPENROUTER_API_KEY) | gemini (GEMINI_API_KEY)
+#   openai_compatible (base_url + LLM_API_KEY, or name your own variable with api_key_env)
+# Keys are read from the environment only; never put them in this file.
 llm:
   signal:
+    provider: ollama
     model_id: llama3.2:3b
     max_new_tokens: 200
     temperature: 0.0
   outbound:
+    provider: ollama
     model_id: llama3.2:3b
     max_new_tokens: 400
     temperature: 0.3
+  # Example: keep the high-volume signal checks local, write emails with your own Claude key:
+  # outbound:
+  #   provider: anthropic
+  #   model_id: claude-opus-5-5
+  #   max_new_tokens: 4096     # Claude reasons before answering; leave room
+  #   effort: low              # low | medium | high | xhigh | max
+  # Example: a self-hosted vLLM / LM Studio server:
+  # signal:
+  #   provider: openai_compatible
+  #   base_url: http://gpu-box:8000/v1
+  #   model_id: <served model name>
+  #   api_key_env: VLLM_API_KEY
 
 signals:
   max_candidates_per_domain: 12

@@ -17,7 +17,8 @@ from src.agents.outbound import draft_email
 from src.crawler import Fetcher, crawl
 from src.integrations.booking import Booker, make_booker
 from src.integrations.crm import Account, CRMAdapter, SignalRecord, make_crm
-from src.llm.ollama_runtime import LLM, OllamaChat, OllamaConfig
+from src.llm.base import LLM
+from src.llm.providers import make_llm
 from src.llm.tracing import TracedLLM, current_trace_id
 from src.schemas import EmailDraft, EvidenceCard, Page
 from src.settings import LLMSettings, Settings, load_settings
@@ -61,8 +62,7 @@ class PipelineState(BaseModel):
 
 
 def _traced(cfg: LLMSettings, store: Store, node: str) -> LLM:
-    inner = OllamaChat(OllamaConfig(cfg.model_id, cfg.max_new_tokens, cfg.temperature))
-    return TracedLLM(inner, store, node=node, model=cfg.model_id)
+    return TracedLLM(make_llm(cfg), store, node=node, model=cfg.model_id, provider=cfg.provider)
 
 
 @dataclass

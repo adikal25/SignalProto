@@ -18,6 +18,7 @@ from src.graph import DetectedSignal, Deps, Pipeline
 from src.integrations.booking import BookingNotSupported
 from src.integrations.crm import Account
 from src.llm.ollama_runtime import ollama_health
+from src.llm.providers import provider_status
 from src.schemas import Booking, EmailDraft, EvidenceCard, Slot
 from src.signals.agent import detect_signals
 from src.store import LLMCallRow, OutreachRow, SignalRow
@@ -82,7 +83,10 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     def pipeline() -> Pipeline:
         if "p" not in state:
-            state["p"] = Pipeline(deps or Deps.from_settings())
+            try:
+                state["p"] = Pipeline(deps or Deps.from_settings())
+            except ValueError as e:  # e.g. a BYOK provider with no key set: say so instead of a bare 500
+                raise HTTPException(status_code=503, detail=f"configuration error: {e}")
         return state["p"]
 
     @app.get("/", include_in_schema=False)
@@ -92,8 +96,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     @app.get("/health")
     def health(p: Pipeline = Depends(pipeline)) -> dict:
         s = p.deps.settings
-        return {"status": "ok", "ollama": ollama_health([s.llm.signal.model_id, s.llm.outbound.model_id]),
-                "models": {"signal": s.llm.signal.model_id, "outbound": s.llm.outbound.model_id},
+        agents = {"signal": s.llm.signal, "outbound": s.llm.outbound}
+        local = [cfg.model_id for cfg in agents.values() if cfg.provider == "ollama"]
+        return {"status": "ok",
+                "agents": {name: provider_status(cfg) for name, cfg in agents.items()},
+                "ollama": ollama_health(local) if local else None,
                 "crm": s.crm.provider, "booking": s.booking.provider,
                 "alerts": bool(s.alerts.webhook_url)}
 

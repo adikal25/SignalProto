@@ -15,7 +15,7 @@ from src.crawler import crawl, normalize_base_url
 from src.graph import Deps, Pipeline
 from src.integrations.booking import CalComBooker, LinkBooker, NoBooker, _spread
 from src.integrations.crm import Account, CSVCRM, HubSpotCRM, SignalRecord
-from src.llm.ollama_runtime import LLMError
+from src.llm.base import LLMError
 from src.schemas import EvidenceCard, Page, SignalVerdict, Slot
 from src.settings import BookingSettings, CrawlSettings, FreshnessSettings, Settings
 from src.signals.agent import detect_signals, freshness_weight, score

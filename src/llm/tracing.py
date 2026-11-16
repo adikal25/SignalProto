@@ -17,7 +17,7 @@ from typing import Optional, Protocol, TypeVar
 
 from pydantic import BaseModel
 
-from src.llm.ollama_runtime import LLM, LLMError
+from src.llm.base import LLM, LLMError, last_usage
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -39,14 +39,16 @@ def input_hash(messages: list[dict[str, str]]) -> str:
 class CallSink(Protocol):
     def log_llm_call(self, *, trace_id: Optional[str], node: str, model: str, prompt_version: str,
                      input_hash: str, input: str, output: Optional[str], error: Optional[str],
-                     latency_ms: int) -> None: ...
+                     latency_ms: int, provider: str = "ollama", input_tokens: Optional[int] = None,
+                     output_tokens: Optional[int] = None) -> None: ...
 
 
 class TracedLLM:
-    def __init__(self, inner: LLM, sink: CallSink, *, node: str, model: str):
-        self.inner, self.sink, self.node, self.model = inner, sink, node, model
+    def __init__(self, inner: LLM, sink: CallSink, *, node: str, model: str, provider: str = "ollama"):
+        self.inner, self.sink, self.node, self.model, self.provider = inner, sink, node, model, provider
 
     def chat_json(self, messages: list[dict[str, str]], schema: type[T]) -> T:
+        last_usage.set(None)
         start = time.perf_counter()
         output: Optional[str] = None
         error: Optional[str] = None
@@ -58,7 +60,11 @@ class TracedLLM:
             error = str(e)
             raise
         finally:
+            usage = last_usage.get()
             self.sink.log_llm_call(
+                provider=self.provider,
+                input_tokens=usage.input_tokens if usage else None,
+                output_tokens=usage.output_tokens if usage else None,
                 trace_id=current_trace_id.get(), node=self.node, model=self.model,
                 prompt_version=prompt_version(messages), input_hash=input_hash(messages),
                 input=messages[-1]["content"], output=output, error=error,
