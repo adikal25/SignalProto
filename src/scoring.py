@@ -1,31 +1,62 @@
-# scoring heuristics on how good the agent is
-import re
-from datetime import datetime,timezone
-EXPLICIT = re.compile(r"(grand\s*opening|now\s*open|new\s*location|opened\s*(our\s*)?(second|third))", re.I)
-ADDRLIKE = re.compile(r"\d{2,5}\s+\w+", re.I)
+"""Prospect scoring: a transparent weighted sum, so every rank can be explained.
+
+Learned weights need outcome data (replies, meetings); until then, explicit beats opaque.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from pydantic import BaseModel
+
+from src.store import AccountRow, SignalRow
+from src.settings import ScoringSettings
+
+NEUTRAL = 0.5  # unknown size / no ICP preference neither helps nor hurts
 
 
-def freshness_weight(published_at, weekly_decay=0.85, floor=0.3):
-    """Calculate freshness weight based on publication date with weekly decay."""
-    if not published_at: 
-        return 1.0
-    n = datetime.now(timezone.utc)
-    weeks = max(0, (n - published_at).days / 7)
-    w = (weekly_decay ** weeks) if weeks else 1.0 #penalizing older signals by decaying weights
-    return max(floor, w)
+class ScoreBreakdown(BaseModel):
+    signal: float
+    diversity: float
+    recency: float
+    size: float
+    fit: float
+    total: float  # 0-100
 
 
-def confidence(signal_type: str, snippet: str, w: float):
-    """Calculate confidence score based on signal type, snippet content, and weight."""
-    base = 0.6; why=[]
-    if EXPLICIT.search(snippet): 
-        base+=0.40
-        why.append("explicit_phrase")
-    if ADDRLIKE.search(snippet):
-        base+=0.35
-        why.append("address_like")
-    if signal_type == "scheduler":
-        base += 0.1
-        why.append("vendor_hint")
-    score = min(1.0, base*w)
-    return round(score,3), ",".join(why) or "generic"
+def _recency(signals: list[SignalRow], decay: float) -> float:
+    newest = max(s.first_seen for s in signals)
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=timezone.utc)
+    weeks = max(0.0, (datetime.now(timezone.utc) - newest).days / 7)
+    return decay ** weeks
+
+
+def _size(employees: Optional[int], cfg: ScoringSettings) -> float:
+    lo, hi = cfg.icp.min_employees, cfg.icp.max_employees
+    if employees is None or (lo is None and hi is None):
+        return NEUTRAL
+    in_range = (lo is None or employees >= lo) and (hi is None or employees <= hi)
+    return 1.0 if in_range else 0.2
+
+
+def _fit(vertical: Optional[str], cfg: ScoringSettings) -> float:
+    if not cfg.icp.verticals or not vertical:
+        return NEUTRAL
+    v = vertical.lower()
+    return 1.0 if any(target.lower() in v for target in cfg.icp.verticals) else 0.2
+
+
+def score_prospect(account: AccountRow, signals: list[SignalRow], cfg: ScoringSettings) -> ScoreBreakdown:
+    if not signals:
+        return ScoreBreakdown(signal=0, diversity=0, recency=0, size=_size(account.employees, cfg),
+                              fit=_fit(account.vertical, cfg), total=0)
+    parts = {
+        "signal": max(s.confidence * cfg.type_weights.get(s.signal_type, 1.0) for s in signals),
+        "diversity": len({s.signal_type for s in signals}) / max(1, len(cfg.type_weights)),
+        "recency": _recency(signals, cfg.recency_weekly_decay),
+        "size": _size(account.employees, cfg),
+        "fit": _fit(account.vertical, cfg),
+    }
+    total = sum(cfg.weights.get(k, 0) * v for k, v in parts.items()) / max(1e-9, sum(cfg.weights.values()))
+    return ScoreBreakdown(**{k: round(v, 3) for k, v in parts.items()}, total=round(100 * total, 1))

@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Unit tests (LLM + HTTP faked)
+        run: pytest -q
+      # Replays recorded model outputs: no model server needed, fully deterministic.
+      # Fails if a prompt changed without re-recording, or if scores regress vs. eval/baseline.json.
+      - name: Eval regression gate (replay)
+        run: |
+          python -m eval.run_eval --model llama3.2:3b --replay --gate
+          python -m eval.run_eval --model llama3.2:1b --replay --gate

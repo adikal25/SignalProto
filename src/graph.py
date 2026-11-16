@@ -1,102 +1,187 @@
-# graph orchestration
-from src.llm.ollama_runtime import OllamaChat, OllamaConfig
+"""LangGraph orchestration, stateful across runs:
+
+crawl (skip unchanged pages) -> signal agent -> diff vs. known signals -> gate on NEW signals
+-> outbound agent -> CRM sync. Every run gets a trace id that tags its LLM calls.
+"""
+from __future__ import annotations
+
+import logging
+import uuid
+from dataclasses import dataclass, field
 from typing import Optional
-from langgraph.graph import StateGraph, END
+
+from langgraph.graph import END, StateGraph
 from pydantic import BaseModel
-import yaml
-from src.schemas import EvidenceCard,ScrapeResult, ValidateResult
-from src.agents.evidence_card import build_card
-from src.agents.outbound import draft_from_card, EmailDraft
-from src.agents.scraper_agent import run_scraper_agent
-from src.agents.validator_agent import run_validator_agent
 
-CONFIDENCE_THRESHOLD = 0.6
+from src.agents.outbound import draft_email
+from src.crawler import Fetcher, crawl
+from src.integrations.booking import Booker, make_booker
+from src.integrations.crm import Account, CRMAdapter, SignalRecord, make_crm
+from src.llm.ollama_runtime import LLM, OllamaChat, OllamaConfig
+from src.llm.tracing import TracedLLM, current_trace_id
+from src.schemas import EmailDraft, EvidenceCard, Page
+from src.settings import LLMSettings, Settings, load_settings
+from src.signals.agent import detect_signals
+from src.signals.changes import content_hash, fingerprint
+from src.store import AccountRow, Store
 
-class NodeState(BaseModel):
-    domain: str
-    company: Optional[str] = None
-    scrape_result: Optional[ScrapeResult] = None
-    validate_result: Optional[ValidateResult] = None
-    card: Optional[EvidenceCard] = None
+log = logging.getLogger(__name__)
+
+
+class DetectedSignal(BaseModel):
+    fingerprint: str
+    card: EvidenceCard
+    is_new: bool
+
+
+class PipelineState(BaseModel):
+    account: Account
+    trace_id: str = ""
+    sync_crm: bool = False
+    force: bool = False
+    pages: list[Page] = []
+    changed_urls: list[str] = []
+    detected: list[DetectedSignal] = []
+    stale_count: int = 0
     email: Optional[EmailDraft] = None
+    crm_record_id: Optional[str] = None
+    skipped_reason: Optional[str] = None
 
-def scrape_node(state: NodeState, llm: OllamaChat) -> NodeState:
-    candidate = ["/","/locations","/book","/schedule","/appointments","/careers","/jobs","/blog","/news","/press"]
-    print(f"DEBUG GRAPH: Starting scrape for {state.domain}")
-    state.scrape_result = run_scraper_agent(state.domain, candidate_paths=candidate, llm=llm, step_limit=5)
-    print(f"DEBUG GRAPH: Scrape result: {state.scrape_result}")
-    return state
+    @property
+    def cards(self) -> list[EvidenceCard]:
+        return [d.card for d in self.detected]
 
-def validate_node(state: NodeState, llm: OllamaChat, patterns_cfg: dict) -> NodeState:
-    print(f"DEBUG GRAPH: Starting validation")
-    print(f"DEBUG GRAPH: Scrape result ok: {state.scrape_result.ok if state.scrape_result else 'None'}")
-    print(f"DEBUG GRAPH: Pages count: {len(state.scrape_result.pages) if state.scrape_result and state.scrape_result.pages else 0}")
-    
-    if not state.scrape_result or not state.scrape_result.ok or not state.scrape_result.pages:
-        print("DEBUG GRAPH: No valid scrape data, skipping validation")
-        return state
-        
-    PATS = {
-        "expansion": patterns_cfg.get("expansion", ["grand opening","now open","new location"]),
-        "scheduler": patterns_cfg.get("scheduler", ["calendly","acuity","book","schedule","appointment"]),
-        "hiring":    patterns_cfg.get("hiring",    ["hiring","role","apply","careers","jobs"]),
-    }
-    print(f"DEBUG GRAPH: Patterns: {PATS}")
-    
-    urls_str = {k: str(v) for k, v in state.scrape_result.urls.items()} if state.scrape_result and state.scrape_result.urls else {}
-    vr = run_validator_agent(state.domain, state.scrape_result.pages, urls_str, PATS, llm=llm, step_limit=4)
-    print(f"DEBUG GRAPH: Validation result: {vr}")
-    state.validate_result = vr
-    
-    if vr.ok and vr.evidence_url and vr.snippet:
-        print(f"DEBUG GRAPH: Building card for signal: {vr.signal_type}")
-        state.card = build_card(vr.signal_type, str(vr.evidence_url), vr.snippet, vr.published_at)
-        print(f"DEBUG GRAPH: Card built: {state.card}")
-    else:
-        print(f"DEBUG GRAPH: No valid signal found")
-    return state
+    @property
+    def new_signals(self) -> list[DetectedSignal]:
+        return [d for d in self.detected if d.is_new]
 
-def outbound_node(state: NodeState, llm: OllamaChat) -> NodeState:
-    print(f"DEBUG GRAPH: Starting outbound")
-    print(f"DEBUG GRAPH: Card exists: {state.card is not None}")
-    print(f"DEBUG GRAPH: Card confidence: {state.card.confidence if state.card else 'N/A'}")
-    
-    if state.card and (state.card.confidence >= CONFIDENCE_THRESHOLD):
-        print(f"DEBUG GRAPH: Confidence threshold met, drafting email")
-        state.email = draft_from_card(
-            llm,
-            company=state.company or state.domain.split(".")[0].title(),
-            domain=state.domain,
-            signal_type=state.card.signal_type,
-            url=str(state.card.canonical_url),
-            snippet=state.card.snippet,
-            confidence=state.card.confidence
-        )
-        print(f"DEBUG GRAPH: Email drafted: {state.email}")
-    else:
-        print(f"DEBUG GRAPH: Confidence threshold not met or no card")
-    return state
+    @property
+    def top_new(self) -> Optional[DetectedSignal]:
+        return self.new_signals[0] if self.new_signals else None
 
-def _build_chat(cfg_block: dict) -> OllamaChat:
-    return OllamaChat(OllamaConfig(
-        model_id      = cfg_block.get("model_id", "phi3.5"),
-        max_new_tokens= cfg_block.get("max_new_tokens", 240),
-        temperature   = cfg_block.get("temperature", 0.1),
-    ))
 
-def make_graph(config_path="configs/config.yml", vertical_config: dict | None = None):
-    cfg = yaml.safe_load(open(config_path))
-    llm_root = cfg.get("llm", {})
-    llm_val = _build_chat(llm_root.get("validator", {}))
-    llm_out = _build_chat(llm_root.get("outbound", {}))
-    patterns = (vertical_config or {}).get("phrases", {})
+def _traced(cfg: LLMSettings, store: Store, node: str) -> LLM:
+    inner = OllamaChat(OllamaConfig(cfg.model_id, cfg.max_new_tokens, cfg.temperature))
+    return TracedLLM(inner, store, node=node, model=cfg.model_id)
 
-    g = StateGraph(NodeState)
-    g.add_node("scrape_node",   lambda s: scrape_node(s, llm=llm_val)) # type: ignore
-    g.add_node("validate_node", lambda s: validate_node(s, llm=llm_val, patterns_cfg=patterns)) # type: ignore
-    g.add_node("outbound_gate", lambda s: outbound_node(s, llm=llm_out)) # pyright: ignore[reportArgumentType]
-    g.set_entry_point("scrape_node")
-    g.add_edge("scrape_node","validate_node")
-    g.add_edge("validate_node","outbound_gate")
-    g.add_edge("outbound_gate", END)
+
+@dataclass
+class Deps:
+    settings: Settings
+    store: Store
+    signal_llm: LLM
+    outbound_llm: LLM
+    booker: Booker
+    crm: CRMAdapter
+    fetcher: Optional[Fetcher] = field(default=None)
+
+    @classmethod
+    def from_settings(cls, settings: Settings | None = None) -> "Deps":
+        s = settings or load_settings()
+        store = Store(s.storage.db_path)
+        return cls(settings=s, store=store,
+                   signal_llm=_traced(s.llm.signal, store, "signal_agent"),
+                   outbound_llm=_traced(s.llm.outbound, store, "outbound_agent"),
+                   booker=make_booker(s.booking), crm=make_crm(s.crm))
+
+
+def build_graph(deps: Deps):
+    s, store = deps.settings, deps.store
+
+    def crawl_node(state: PipelineState) -> dict:
+        domain = state.account.domain
+        pages = crawl(domain, s.crawl, fetcher=deps.fetcher)
+        if not pages:
+            return {"pages": [], "skipped_reason": "no_pages_fetched"}
+        hashes = {p.url: content_hash(p.text) for p in pages}
+        previous = store.snapshot_hashes(domain)
+        changed = [u for u, h in hashes.items() if state.force or previous.get(u) != h]
+        store.touch_signals_on_pages(domain, [u for u in hashes if u not in changed])
+        store.save_snapshots(domain, hashes)
+        return {"pages": pages, "changed_urls": changed,
+                "skipped_reason": None if changed else "no_page_changes"}
+
+    def signal_node(state: PipelineState) -> dict:
+        domain = state.account.domain
+        changed_pages = [p for p in state.pages if p.url in state.changed_urls]
+        if not changed_pages:
+            return {"detected": []}
+        cards = detect_signals(changed_pages, deps.signal_llm, freshness=s.freshness,
+                               max_candidates=s.signals.max_candidates_per_domain)
+        known = store.known_fingerprints(domain)
+        detected: list[DetectedSignal] = []
+        for card in cards:
+            fp = fingerprint(domain, card)
+            if any(d.fingerprint == fp for d in detected):
+                continue
+            detected.append(DetectedSignal(fingerprint=fp, card=card, is_new=fp not in known))
+            store.upsert_signal(domain, fp, card)
+        stale = store.mark_stale(domain, state.changed_urls, {d.fingerprint for d in detected})
+        return {"detected": detected, "stale_count": stale}
+
+    def gate(state: PipelineState) -> str:
+        top = state.top_new
+        return "outbound" if top and top.card.confidence >= s.gate.min_confidence else "below_gate"
+
+    def below_gate_node(state: PipelineState) -> dict:
+        if state.skipped_reason:
+            reason = state.skipped_reason
+        elif not state.detected:
+            reason = "no_verified_signal"
+        elif not state.new_signals:
+            reason = "no_new_signals"
+        else:
+            reason = "below_confidence_gate"
+        return {"skipped_reason": reason}
+
+    def outbound_node(state: PipelineState) -> dict:
+        top = state.top_new
+        assert top is not None
+        try:
+            slots = deps.booker.available_slots()
+        except Exception as e:  # a booking outage should not block the draft
+            log.warning("slot lookup failed: %s", e)
+            slots = []
+        company = state.account.company or state.account.domain
+        email = draft_email(deps.outbound_llm, top.card, company, s.sender, slots,
+                            deps.booker.booking_link(), s.booking.timezone)
+        store.add_outreach(state.account.domain, top.fingerprint, email)
+        return {"email": email}
+
+    def crm_node(state: PipelineState) -> dict:
+        top = state.top_new
+        if not state.sync_crm or top is None:
+            return {"crm_record_id": None}
+        record = SignalRecord(account=state.account, card=top.card, email=state.email)
+        return {"crm_record_id": deps.crm.record_signal(record)}
+
+    g = StateGraph(PipelineState)
+    g.add_node("crawl", crawl_node)
+    g.add_node("signal_agent", signal_node)
+    g.add_node("below_gate", below_gate_node)
+    g.add_node("outbound_agent", outbound_node)
+    g.add_node("crm_sync", crm_node)
+    g.set_entry_point("crawl")
+    g.add_edge("crawl", "signal_agent")
+    g.add_conditional_edges("signal_agent", gate, {"outbound": "outbound_agent", "below_gate": "below_gate"})
+    g.add_edge("outbound_agent", "crm_sync")
+    g.add_edge("below_gate", "crm_sync")
+    g.add_edge("crm_sync", END)
     return g.compile()
+
+
+class Pipeline:
+    def __init__(self, deps: Deps):
+        self.deps = deps
+        self.graph = build_graph(deps)
+
+    def run(self, account: Account, *, sync_crm: bool = False, force: bool = False) -> PipelineState:
+        self.deps.store.upsert_account(AccountRow(**account.model_dump()))
+        trace_id = uuid.uuid4().hex[:16]
+        token = current_trace_id.set(trace_id)
+        try:
+            result = self.graph.invoke(PipelineState(account=account, trace_id=trace_id,
+                                                     sync_crm=sync_crm, force=force))
+        finally:
+            current_trace_id.reset(token)
+        return PipelineState.model_validate(result)

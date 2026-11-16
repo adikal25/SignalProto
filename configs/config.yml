@@ -1,39 +1,64 @@
 crawl:
-  #respect_robots: true
-  max_pages_per_domain: 5
-  allowed_paths: ["/", "/test.html","/locations", "/book", "/schedule", "/appointments", "/careers", "/jobs", "/blog", "/news", "/press"]
-  sleep_seconds: [1.0,1.5]
+  paths: ["/", "/test.html", "/careers", "/jobs", "/locations", "/news", "/press", "/blog", "/about"]
+  max_pages: 8
+  timeout_seconds: 15
 
-#confidence threshhold for trigerring outbounds Agents
+# confidence threshold for triggering the outbound agent
 gate:
-  min_confidence: 0.4
+  min_confidence: 0.6
 
-#freshness decay how scores are weighed as they age
-confidence:
-  weekly_decay: 0.65 #focusing more on recency
-  floor: 0.3 
-
-
-#enable for more recursive iin depth pages later with more compute power
-ranking:
-  enable: false
-
+# freshness decay: how scores are weighed as signals age
+freshness:
+  weekly_decay: 0.65 # focusing more on recency
+  floor: 0.3
 
 llm:
-  validator: 
-    backend: ollama  
-    model_id: llama3.2:1b 
-    device: mps         
-    dtype: float16       
+  signal:
+    model_id: llama3.2:3b
     max_new_tokens: 200
-    temperature: 0.03
-    tool_step_limit: 5
+    temperature: 0.0
+  outbound:
+    model_id: llama3.2:3b
+    max_new_tokens: 400
+    temperature: 0.3
 
-  outbound:  
-    backend: ollama  
-    model_id: llama3.2:1b 
-    device: mps
-    dtype: float16
-    max_new_tokens: 300
-    temperature: 0.35
-    tool_step_limit: 4
+signals:
+  max_candidates_per_domain: 12
+
+sender:
+  name: Alex
+  company: Acme
+  value_prop: helps growing teams turn new demand into booked appointments
+
+# provider: none | link | calcom   (calcom reads CALCOM_API_KEY from env)
+booking:
+  provider: none
+  link_url: null
+  calcom_event_type_id: null
+  timezone: America/New_York
+  slots_to_offer: 3
+  lookahead_days: 7
+
+# provider: none | csv | webhook | hubspot   (hubspot reads HUBSPOT_TOKEN from env)
+crm:
+  provider: none
+  csv_accounts_path: data/companies.sample.csv
+  csv_output_path: data/crm_records.jsonl
+  webhook_url: null
+
+storage:
+  db_path: data/signalproto.db
+
+# new signals found by `watch` are POSTed here (e.g. a Slack incoming webhook)
+alerts:
+  webhook_url: null
+
+# prospect score = weighted sum of components in [0, 1], shown as 0-100
+scoring:
+  type_weights: {expansion: 1.0, hiring: 0.8}
+  weights: {signal: 0.45, diversity: 0.15, recency: 0.2, size: 0.1, fit: 0.1}
+  recency_weekly_decay: 0.85
+  icp:
+    min_employees: 5
+    max_employees: 200
+    verticals: []   # e.g. [dental, veterinary, fitness]; empty = no vertical preference

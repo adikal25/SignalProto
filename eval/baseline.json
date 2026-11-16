@@ -1,0 +1,12 @@
+{
+  "llama3.2:3b": {
+    "precision": 0.946,
+    "recall": 0.875,
+    "f1": 0.909
+  },
+  "llama3.2:1b": {
+    "precision": 0.842,
+    "recall": 0.8,
+    "f1": 0.821
+  }
+}
